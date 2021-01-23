@@ -22,6 +22,7 @@ import * as portForwarder from './bg/nat-port-forwarder'
 import dbs from './bg/dbs/index'
 import hyper from './bg/hyper/index'
 import * as filesystem from './bg/filesystem/index'
+import * as bookmarkPins from './bg/filesystem/pins'
 import * as webapis from './bg/web-apis/bg'
 
 import * as initWindow from './bg/ui/init-window'
@@ -60,6 +61,10 @@ process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = '1' // we know, we know
 // enable the sandbox
 app.enableSandbox()
 
+// HACK fix for cors in custom protocols
+// see https://github.com/electron/electron/issues/20730
+app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors')
+
 // enable process reuse to speed up navigations
 // see https://github.com/electron/electron/issues/18397
 app.allowRendererProcessReuse = true
@@ -67,7 +72,7 @@ app.allowRendererProcessReuse = true
 // configure the protocols
 protocol.registerSchemesAsPrivileged([
   {scheme: 'dat', privileges: {standard: true, secure: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: true}},
-  {scheme: 'hyper', privileges: {standard: true, secure: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: true}},
+  {scheme: 'hyper', privileges: {standard: true, secure: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: true, stream: true}},
   {scheme: 'beaker', privileges: {standard: true, secure: true, allowServiceWorkers: true, supportFetchAPI: true, corsEnabled: true}}
 ])
 
@@ -118,6 +123,7 @@ app.on('ready', async function () {
   await beakerBrowser.setup()
   adblocker.setup()
   analytics.setup()
+  await bookmarkPins.setup()
 
   // protocols
   log.info('Registering protocols')
@@ -161,10 +167,8 @@ app.on('window-all-closed', () => {
 app.on('will-quit', async (e) => {
   if (hyper.daemon.requiresShutdown()) {
     e.preventDefault()
-    initWindow.open({isShutdown: true})
     log.info('Delaying shutdown to teardown the daemon')
     await hyper.daemon.shutdown()
-    initWindow.close()
     app.quit()
   }
 })

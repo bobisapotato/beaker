@@ -21,6 +21,7 @@ export class DownloadsView extends LitElement {
     super()
     this.downloads = undefined
     this.filter = undefined
+    this.load()
   }
 
   async load () {
@@ -48,7 +49,7 @@ export class DownloadsView extends LitElement {
         <div class="downloads">
           ${repeat(downloads, download => this.renderDownload(download))}
           ${downloads.length === 0 ? html`
-            <div class="empty">No downloads found</div>
+            <div class="empty">No recent downloads</div>
           ` : ''}
         </div>
       ` : html`

@@ -19,22 +19,11 @@ export var hasVisitedProfile = false
 export async function runSetupFlow () {
   var setupState = await profileDb.get('SELECT * FROM setup_state')
   if (!setupState) {
-    setupState = {migrated08to09: 0, profileSetup: 0, hasVisitedProfile: 0}
+    setupState = {
+      migrated08to09: 0,
+      profileSetup: 0
+    }
     await profileDb.run(knex('setup_state').insert(setupState))
-  }
-  hasVisitedProfile = setupState.hasVisitedProfile === 1
-
-  // TODO
-  // do we even need to track profileSetup in setup_state?
-  // might be better to just use the address-book.json state
-  // -prf
-  var hasProfile = !!(await filesystem.getProfile())
-  if (setupState.profileSetup && !hasProfile) {
-    setupState.profileSetup = 0
-    await profileDb.run(knex('setup_state').update(setupState))
-  } else if (!setupState.profileSetup && hasProfile) {
-    setupState.profileSetup = 1
-    await profileDb.run(knex('setup_state').update(setupState))
   }
 
   var needsSetup = !setupState.profileSetup || !setupState.migrated08to09
@@ -78,9 +67,4 @@ export async function updateSetupState (obj) {
   // -prf
   var setupState = await profileDb.get('SELECT * FROM setup_state')
   if (setupWindow && setupState.profileSetup && setupState.migrated08to09) setupWindow.close()
-}
-
-export async function setHasVisitedProfile () {
-  hasVisitedProfile = true
-  await profileDb.run(knex('setup_state').update({hasVisitedProfile: 1}))
 }

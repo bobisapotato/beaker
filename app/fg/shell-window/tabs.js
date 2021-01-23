@@ -6,11 +6,14 @@ import { repeat } from '../vendor/lit-element/lit-html/directives/repeat'
 import spinnerCSS from './spinner.css'
 import * as bg from './bg-process-rpc'
 
+const ANIMATIONS_ENABLED = false
+
 class ShellWindowTabs extends LitElement {
   static get properties () {
     return {
       tabs: {type: Array},
       isFullscreen: {type: Boolean, attribute: 'is-fullscreen'},
+      hasBgTabs: {type: Boolean, attribute: 'has-bg-tabs'},
       isBackgroundTrayOpen: {type: Boolean}
     }
   }
@@ -20,6 +23,7 @@ class ShellWindowTabs extends LitElement {
     this.tabs = []
     this.tabsTransitionState = undefined // used for 'close animations'
     this.isFullscreen = false
+    this.hasBgTabs = false
     this.draggedTabIndex = null
     this.isDraggingWindow = false
     this.isBackgroundTrayOpen = false
@@ -100,7 +104,14 @@ class ShellWindowTabs extends LitElement {
       || faviconUrl
       || tab.url.startsWith('beaker:')
     )
-    const cls = classMap({tab: true, current: tab.isActive, pinned: tab.isPinned, 'no-favicon': !showFavicon})
+    const cls = classMap({
+      tab: true,
+      current: tab.isActive,
+      pinned: tab.isPinned,
+      'has-icon': tab.isAudioMuted || tab.isCurrentlyAudible,
+      'no-hover': this.tabs.length >= 12,
+      'no-favicon': !showFavicon
+    })
     return html`
       <div
         class="${cls}"
@@ -142,8 +153,7 @@ class ShellWindowTabs extends LitElement {
               : tab.isCurrentlyAudible
                 ? html`<span class="fas fa-volume-up"></span>`
                 : ''}
-            ${tab.isActive ? html`
-              <div class="tab-minimize" title="Minimize to background" @click=${e => this.onClickMinimize(e, index)}></div>
+            ${this.tabs.length < 12 || tab.isActive ? html`
               <div class="tab-close" title="Close tab" @click=${e => this.onClickClose(e, index)}></div>
             ` : ''}
           `}
@@ -152,7 +162,12 @@ class ShellWindowTabs extends LitElement {
   }
 
   get backgroundTrayBtn () {
-    const cls = classMap({'background-tray-btn': true, pressed: this.isBackgroundTrayOpen})
+    if (!this.hasBgTabs) return ''
+    const cls = classMap({
+      'background-tray-btn': true,
+      pressed: this.isBackgroundTrayOpen,
+      hidden: !this.hasBgTabs
+    })
     return html`
       <button class=${cls} @click=${this.onClickBackgroundTray}>
         <span class="fas fa-caret-down"></span>
@@ -161,7 +176,7 @@ class ShellWindowTabs extends LitElement {
   }
 
   updated (changedProperties) {
-    if (changedProperties.has('tabs')) {
+    if (ANIMATIONS_ENABLED && changedProperties.has('tabs')) {
       let oldVal = changedProperties.get('tabs') || []
       let [oldLen, newLen] = [oldVal.length, this.tabs.length]
       if (newLen > oldLen) {
@@ -180,7 +195,7 @@ class ShellWindowTabs extends LitElement {
   }
 
   async shouldUpdate (changedProperties) {
-    if (changedProperties.has('tabs')) {
+    if (ANIMATIONS_ENABLED && changedProperties.has('tabs')) {
       let oldVal = changedProperties.get('tabs') || []
       let [oldLen, newLen] = [oldVal.length, this.tabs.length]
       if (newLen < oldLen) {
@@ -205,29 +220,30 @@ class ShellWindowTabs extends LitElement {
   }
 
   doMinimizeToBgAnim () {
-    var srcEl = this.shadowRoot.querySelector('.tab.current')
-    var dstEl = this.shadowRoot.querySelector('.background-tray-btn')
-    if (!srcEl) return console.warn('Minimize anim aborted; source element not found')
-    if (!dstEl) return console.warn('Minimize anim aborted; target element not found')
+    // DISABLED
+    // var srcEl = this.shadowRoot.querySelector('.tab.current')
+    // var dstEl = this.shadowRoot.querySelector('.tabs')
+    // if (!srcEl) return console.warn('Minimize anim aborted; source element not found')
+    // if (!dstEl) return console.warn('Minimize anim aborted; target element not found')
 
-    var src = srcEl.getClientRects()[0]
-    var dst = dstEl.getClientRects()[0]
-    var dist = Math.abs(src.left - dst.left)
-    var animElem = document.createElement('div')
-    animElem.classList.add('minimize-to-bg-anim-elem')
-    this.shadowRoot.append(animElem)
-    const px = v => `${v}px`
-    animElem.animate([
-      {left: px(src.left), top: px(src.top), width: px(src.width), height: px(src.height)},
-      {left: px(dst.left), top: px(dst.top), width: px(dst.width), height: px(dst.height)}
-    ], {iterations: 1, duration: Math.max(Math.min(dist / 6, 400), 100)}).onfinish = () => {
-      animElem.remove()
-      dstEl.animate([
-        {background: 'var(--bg-color--background)'},
-        {background: 'var(--bg-color--tab--hover)'},
-        {background: 'var(--bg-color--background)'}
-      ], {duration: 250, iterations: 1})
-    }
+    // var src = srcEl.getClientRects()[0]
+    // var dst = dstEl.getClientRects()[0]
+    // var dist = Math.abs(src.left - dst.left)
+    // var animElem = document.createElement('div')
+    // animElem.classList.add('minimize-to-bg-anim-elem')
+    // this.shadowRoot.append(animElem)
+    // const px = v => `${v}px`
+    // animElem.animate([
+    //   {left: px(src.left), top: px(src.top), width: px(src.width), height: px(src.height)},
+    //   {left: px(dst.left), top: px(dst.top), width: px(dst.width), height: px(dst.height)}
+    // ], {iterations: 1, duration: Math.max(Math.min(dist / 6, 400), 100)}).onfinish = () => {
+    //   animElem.remove()
+    //   dstEl.animate([
+    //     {background: 'var(--bg-color--background)'},
+    //     {background: 'var(--bg-color--tab--hover)'},
+    //     {background: 'var(--bg-color--background)'}
+    //   ], {duration: 250, iterations: 1})
+    // }
   }
 
   // events
@@ -258,12 +274,6 @@ class ShellWindowTabs extends LitElement {
     if (e.which === 2) {
       bg.views.closeTab(index)
     }
-  }
-
-  onClickMinimize (e, index) {
-    e.preventDefault()
-    e.stopPropagation()
-    bg.views.minimizeTab(index)
   }
 
   onClickClose (e, index) {
@@ -382,19 +392,23 @@ ${spinnerCSS}
   height: 34px;
 }
 
-.shell.win32 {
-  padding-right: 140px;
+.shell:not(.darwin) {
+  box-shadow: inset 0 2px 4px #0001;
 }
 
 .tabs {
   display: flex;
-  padding: 0 18px 0 10px;
+  padding: 0 18px 0 0;
   border-bottom: 1px solid var(--border-color--tab);
   height: 33px;
-  max-width: calc(100% - 38px);
+}
+
+.shell:not(.darwin) .tabs > :first-child {
+  border-left: 0;
 }
 
 .background-tray-btn {
+  flex: 0 0 38px;
   width: 38px;
   height: 30px;
   background: transparent;
@@ -413,6 +427,10 @@ ${spinnerCSS}
 .background-tray-btn span {
   font-size: 14px;
   line-height: 16px;
+}
+
+.background-tray-btn.hidden {
+  display: none;
 }
 
 .unused-space {
@@ -434,9 +452,9 @@ ${spinnerCSS}
   position: relative;
   top: 3px;
   height: 30px;
-  width: 235px;
+  width: 200px;
   min-width: 0; /* HACK: https://stackoverflow.com/questions/38223879/white-space-nowrap-breaks-flexbox-layout */
-  background: var(--bg-color--background);
+  background: transparent;
   transition: background 0.3s;
   border-left: 1px solid var(--border-color--tab);
 }
@@ -448,7 +466,6 @@ ${spinnerCSS}
 .tab-favicon {
   width: 16px;
   height: 23px;
-  image-rendering: -webkit-optimize-contrast;
   text-align: center;
   position: absolute;
   left: 10px;
@@ -474,11 +491,12 @@ ${spinnerCSS}
 }
 
 .tab-title {
+  font-family: system-ui;
   color: var(--text-color--tab--title);
   font-size: 11.5px;
-  letter-spacing: 0.2px;
   padding: 9px 11px 9px 30px;
   height: 13px;
+  line-height: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -512,7 +530,7 @@ ${spinnerCSS}
 .tab-minimize {
   opacity: 0;
   position: absolute;
-  top: 8px;
+  top: 7px;
   width: 16px;
   height: 16px;
   z-index: 4;
@@ -527,12 +545,7 @@ ${spinnerCSS}
   right: 8px;
 }
 
-.tab-minimize {
-  right: 25px;
-}
-
-.tab-close:before,
-.tab-minimize:before {
+.tab-close:before {
   opacity: 0;
 }
 
@@ -544,27 +557,13 @@ ${spinnerCSS}
   line-height: .71;
 }
 
-.tab-minimize:before {
-  display: block;
-  content: "";
-  position: absolute;
-  left: 3px;
-  right: 3px;
-  bottom: 3px;
-  border-bottom: 1.5px solid;
-}
-
 .tab-close:hover:before,
-.tab-close:active:before,
-.tab-minimize:hover:before,
-.tab-minimize:active:before {
+.tab-close:active:before {
   opacity: 1;
 }
 
 .tab-close:hover,
-.tab-close:active,
-.tab-minimize:hover,
-.tab-minimize:active  {
+.tab-close:active  {
   background: var(--bg-color--tab-close--hover);
 }
 
@@ -574,28 +573,25 @@ ${spinnerCSS}
   background: var(--bg-color--tab--hover);
 }
 
-.tab.current:hover .tab-title {
-  padding-right: 40px;
+.tab.has-icon .tab-title,
+.tab:hover:not(.no-hover) .tab-title {
+  padding-right: 28px;
 }
 
-.tab:hover .tab-close,
-.tab:hover .tab-minimize {
+.tab:hover .tab-close {
   opacity: 1;
   background: var(--bg-color--tab--hover);
 }
 
-.tab:hover .tab-close:hover,
-.tab:hover .tab-minimize:hover {
+.tab:hover .tab-close:hover {
   background: var(--bg-color--tab-close--hover);
 }
 
-.tab.current:hover .tab-close:hover,
-.tab.current:hover .tab-minimize:hover {
+.tab.current:hover .tab-close:hover {
   background: var(--bg-color--tab-close--current--hover);
 }
 
-.tab:hover .tab-close:before,
-.tab:hover .tab-minimize:before {
+.tab:hover .tab-close:before {
   opacity: 1;
 }
 
@@ -614,8 +610,7 @@ ${spinnerCSS}
   background: var(--highlight-color--tab--current);
 }
 
-.tab.current .tab-close,
-.tab.current .tab-minimize {
+.tab.current .tab-close {
   background: var(--bg-color--tab--current);
 }
 
@@ -654,7 +649,7 @@ ${spinnerCSS}
   padding-left: 75px;
 }
 .darwin.fullscreen .tabs {
-  padding-left: 10px; /* not during fullscreen */
+  padding-left: 0px; /* not during fullscreen */
 }
 
 .minimize-to-bg-anim-elem {

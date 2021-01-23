@@ -14,6 +14,7 @@ class NavbarSiteInfo extends LitElement {
       siteIcon: {type: String},
       siteTrust: {type: String},
       driveDomain: {type: String},
+      driveIdent: {type: String},
       writable: {type: Boolean},
       isPressed: {type: Boolean},
       hideOrigin: {type: Boolean, attribute: 'hide-origin'},
@@ -29,6 +30,7 @@ class NavbarSiteInfo extends LitElement {
     this.siteIcon = ''
     this.siteTrust = ''
     this.driveDomain = ''
+    this.driveIdent = ''
     this.writable = false
     this.isPressed = false
     this.hideOrigin = false
@@ -49,6 +51,10 @@ class NavbarSiteInfo extends LitElement {
     } catch (e) {
       return ''
     }
+  }
+
+  get isHyperdrive () {
+    return this.url.startsWith('hyper://')
   }
 
   // rendering
@@ -82,8 +88,21 @@ class NavbarSiteInfo extends LitElement {
       <link rel="stylesheet" href="beaker://assets/font-awesome.css">
       <button class=${classMap({[this.siteTrust]: true, pressed: this.isPressed, 'hide-origin': this.hideOrigin, rounded: this.rounded})} @click=${this.onClickButton}>
         ${innerHTML}
+        ${this.renderHyperCtrls()}
       </button>
     `
+  }
+
+  renderHyperCtrls () {
+    if (!this.isHyperdrive) {
+      return ''
+    }
+    if (this.writable) {
+      if (['system', 'profile'].includes(this.driveIdent)) {
+        return ''
+      }
+      return html`<span class="fas fa-fw fa-pen"></span>`
+    }
   }
 
   // events
@@ -123,6 +142,11 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+:host([autocomplete-open]) button {
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 0;
 }
 
 button:not(:disabled):hover {
@@ -228,5 +252,6 @@ button.hidden {
 .untrusted {
   color: var(--text-color--cert--untrusted);
 }
+
 `]
 customElements.define('shell-window-navbar-site-info', NavbarSiteInfo)

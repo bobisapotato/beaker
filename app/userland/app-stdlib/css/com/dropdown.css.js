@@ -19,15 +19,15 @@ const cssStr = css`
 
 @media (prefers-color-scheme: dark) {
   .dropdown {
-    --text-color--dropdown-default: #ccd;
+    --text-color--dropdown-default: #ccc;
     --text-color--dropdown-section: #aaa;
-    --text-color--dropdown-icon: #eef;
-    --text-color--dropdown-btn--pressed: #2c2c31;
+    --text-color--dropdown-icon: #eee;
+    --text-color--dropdown-btn--pressed: #2c2c2c;
     --text-color--title: gray;
-    --bg-color--dropdown: #334;
-    --bg-color--dropdown-item--hover: #445;
-    --border-color--dropdown: #556;
-    --border-color--dropdown-item: #669;
+    --bg-color--dropdown: #333;
+    --bg-color--dropdown-item--hover: #444;
+    --border-color--dropdown: #555;
+    --border-color--dropdown-item: #666;
     --border-color--dropdown-section: rgba(0,0,0,.1);
     --border-color--dropdown-separator: #ddd;
   }
@@ -114,7 +114,11 @@ const cssStr = css`
 }
 
 .dropdown-items.very-roomy .dropdown-item {
-  padding: 20px 30px;
+  padding: 16px 40px 16px 20px;
+}
+
+.dropdown-items.rounded {
+  border-radius: 16px;
 }
 
 .dropdown-items.no-border .dropdown-item {
@@ -184,6 +188,10 @@ const cssStr = css`
   border-bottom: 0;
 }
 
+.dropdown-item.selected {
+  background: var(--bg-color--dropdown-item--hover);  
+}
+
 .dropdown-item:hover:not(.no-hover) {
   background: var(--bg-color--dropdown-item--hover);
   cursor: pointer;
@@ -250,5 +258,6 @@ const cssStr = css`
 .dropdown-item:last-of-type {
   border-radius: 0 0 2px 2px;
 }
+
 `
 export default cssStr

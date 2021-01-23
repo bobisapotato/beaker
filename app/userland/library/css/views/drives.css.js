@@ -53,9 +53,14 @@ a[href]:hover {
   position: relative;
   display: flex;
   align-items: center;
-  padding: 12px 20px;
+  padding: 6px 14px;
   color: var(--text-color--lightish);
   border-bottom: 1px solid var(--border-color--light);
+}
+
+:host([simple]) .drive {
+  border: 0;
+  padding: 8px 4px;
 }
 
 .drive:hover {
@@ -80,15 +85,16 @@ a[href]:hover {
   width: 16px;
   height: 16px;
   object-fit: cover;
-  margin-right: 20px;
+  margin-right: 12px;
+}
+
+:host([simple]) .drive .favicon {
+  margin-right: 10px;
 }
 
 .drive .title {
-  font-weight: 500;
+  font-weight: 400;
   margin-right: 20px;
-}
-
-:host(.full-size) .drive .title {
   flex: 1;
   font-size: 14px;
   margin-right: 0px;
@@ -100,23 +106,14 @@ a[href]:hover {
 }
 
 .drive .description {
-  flex: 1;
   color: #99a;
   overflow: hidden;
-}
-
-:host(.full-size) .drive .description {
   flex: 2;
 }
 
-.drive .readonly {
-  display: inline-block;
-  background: var(--bg-color--light);
-  color: var(--text-color--light);
-  font-size: 11px;
-  font-weight: 500;
-  padding: 0 4px 2px;
-  border-radius: 2px;
+.drive .owner {
+  flex: 0 0 50px;
+  color: #99a;
 }
 
 .drive .forks {
@@ -155,7 +152,7 @@ a[href]:hover {
   border-left: 40px solid var(--bg-color--light);
 }
 
-.fork-label {
+.tag {
   display: inline-block;
   padding: 1px 5px;
   background: #4CAF50;
@@ -163,6 +160,30 @@ a[href]:hover {
   text-shadow: 0 1px 0px #0004;
   border-radius: 4px;
   font-size: 10px;
+  margin-right: 2px;
+}
+
+@media (max-width: 700px) {
+  .drive {
+    font-size: 12px;
+  }
+  .drive .favicon {
+    width: 12px;
+    height: 12px;
+  }
+  .drive .title {
+    font-size: 12px;
+  }
+  .drive .description {
+    display: none;
+  }
+  .drive .peers {
+    flex: 0 0 60px;
+    min-width: 50px;
+  }
+  .drive .forks {
+    flex: 0 0 50px;
+  }
 }
 
 `

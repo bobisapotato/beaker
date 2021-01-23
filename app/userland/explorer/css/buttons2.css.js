@@ -9,7 +9,7 @@ ${colorscss}
 
 button {
   background: #fff;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-color--semi-light);
   border-radius: 3px;
   box-shadow: 0 1px 1px rgba(0,0,0,.05);
   padding: 5px 10px;
@@ -19,11 +19,11 @@ button {
 }
 
 button:hover {
-  background: #f5f5f5;
+  background: #0001;
 }
 
 button:active {
-  background: #eee;
+  background: #0001;
 }
 
 button.big {
@@ -63,7 +63,7 @@ button.gray:hover {
 }
 
 button[disabled] {
-  border-color: var(--border-color);
+  border-color: var(--border-color--semi-light);
   background: #fff;
   color: #999;
   cursor: default;
@@ -88,7 +88,7 @@ button.transparent {
 }
 
 button.transparent:hover {
-  background: #f5f5fa;
+  background: #0002;
 }
 
 button.transparent.pressed {

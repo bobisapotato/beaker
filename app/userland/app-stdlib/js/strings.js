@@ -55,7 +55,7 @@ export function toDomain (str) {
 }
 
 export function toNiceDomain (str, len=4) {
-  var domain = toDomain(str)
+  var domain = str.includes('://') ? toDomain(str) : str
   if (DRIVE_KEY_REGEX.test(domain)) {
     domain = `${domain.slice(0, len)}..${domain.slice(-2)}`
   }
@@ -77,7 +77,7 @@ export function toNiceUrl (str) {
 }
 
 export function makeSafe (str = '') {
-  return str.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 // search results are returned from beaker's search APIs with nonces wrapping the highlighted sections
@@ -99,10 +99,37 @@ export function slugifyUrl (str = '') {
   return slugify(str)
 }
 
-const reservedChars = /[ <>:"/\\|?*\x00-\x1F]/g
+export function createResourceSlug (href, title) {
+  var slug
+  try {
+    var hrefp = new URL(href)
+    if (hrefp.pathname === '/' && !hrefp.search && !hrefp.hash) {
+      // at the root path - use the hostname for the filename
+      if (DRIVE_KEY_REGEX.test(hrefp.hostname) && !!title.trim()) {
+        // ...unless it's a hyper key
+        slug = slugify(title.trim())
+      } else {
+        slug = slugify(hrefp.hostname)
+      }
+    } else if (typeof title === 'string' && !!title.trim()) {
+      // use the title if available on subpages
+      slug = slugify(title.trim())
+    } else {
+      // use parts of the url
+      slug = slugify(hrefp.hostname + hrefp.pathname + hrefp.search + hrefp.hash)
+    }
+  } catch (e) {
+    // weird URL, just use slugified version of it
+    slug = slugify(href)
+  }
+  return slug.toLowerCase()
+}
+
+const reservedChars = /[^\w]/g
 const endingDashes = /([-]+$)/g
+const extraDashes = /(-[-]+)/g
 export function slugify (str = '') {
-  return str.replace(reservedChars, '-').replace(endingDashes, '')
+  return str.replace(reservedChars, '-').replace(endingDashes, '').replace(extraDashes, '-')
 }
 
 export function normalizeUrl (str = '') {
@@ -168,4 +195,54 @@ export function hashFnv32a (str, asString, seed) {
     return ("0000000" + (hval >>> 0).toString(16)).substr(-8)
   }
   return hval >>> 0
+}
+
+export function toHex (buf) {
+  return buf.reduce((memo, i) => (
+    memo + ('0' + i.toString(16)).slice(-2) // pad with leading 0 if <16
+  ), '')
+}
+
+export function isSameOrigin (a, b) {
+	return getOrigin(a) === getOrigin(b)
+}
+
+export function getOrigin (str) {
+	let i = str.indexOf('://')
+	let j = str.indexOf('/', i + 3)
+	return str.slice(0, j === -1 ? undefined : j)
+}
+
+export function fancyUrl (str, siteTitle) {
+  try {
+    let url = new URL(str)
+    let parts = [siteTitle || toNiceDomain(url.hostname)].concat(url.pathname.split('/').filter(Boolean))
+    return parts.join(' › ') + (url.search ? ` ? ${url.search.slice(1)}` : '')
+  } catch (e) {
+    return str
+  }
+}
+
+var _fancyUrlAsyncCache = {}
+export async function* fancyUrlAsync (str) {
+  try {
+    let url = new URL(str)
+    if (_fancyUrlAsyncCache[url.origin]) {
+      yield fancyUrl(str, _fancyUrlAsyncCache[url.origin])
+      return
+    }
+    yield fancyUrl(str)
+    // TODO
+    // if (url.protocol === 'hyper:') {
+    //   let {site} = await beaker.index.gql(`
+    //     query Site ($origin: String!) {
+    //       site(url: $origin, cached: true) { title }
+    //     }
+    //   `, {origin: url.origin})
+    //   _fancyUrlAsyncCache[url.origin] = site.title
+    //   yield fancyUrl(str, site.title)
+    // }
+  } catch (e) {
+    return str
+  }
 }

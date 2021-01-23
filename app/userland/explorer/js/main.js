@@ -1,7 +1,7 @@
 import { LitElement, html } from '../vendor/lit-element/lit-element.js'
 import { classMap } from '../vendor/lit-element/lit-html/directives/class-map.js'
 import { repeat } from '../vendor/lit-element/lit-html/directives/repeat.js'
-import { joinPath, pluralize, changeURLScheme } from './lib/strings.js'
+import { joinPath, pluralize } from './lib/strings.js'
 import { timeDifference } from './lib/time.js'
 import * as toast from './com/toast.js'
 import * as contextMenu from './com/context-menu.js'
@@ -67,10 +67,6 @@ export class ExplorerApp extends LitElement {
     this.renderMode = undefined
     this.inlineMode = false
     this.sortMode = undefined
-
-    // helper state
-    this.drives = undefined
-    this.profiles = undefined
 
     beaker.panes.addEventListener('pane-attached', e => {
       this.attachedPane = beaker.panes.getAttachedPane()
@@ -184,25 +180,19 @@ export class ExplorerApp extends LitElement {
   async load () {
     if (this.attachedPane) {
       if (!loc.getUrl() || !loc.getUrl().startsWith('hyper://')) {
+        // TEMP just give up if not hyper
+        return window.close()
         this.errorState = {task: 'Attempting to load', error: new Error('Failed to load this address: not a hyperdrive')}
         return
       }
     } else if (!loc.getUrl()) {
-      return loc.setUrl('hyper://system/')
+      return loc.setUrl('hyper://private/')
     }
 
-    // read helper state
-    beaker.hyperdrive.readFile('hyper://system/address-book.json', 'json').then(addressBook => {
-      return Promise.all(addressBook.profiles.map(p => beaker.hyperdrive.getInfo(p.key)))
-    }).then(profiles => {
-      profiles.sort((a, b) => (a.title||'').localeCompare(b.title||''))
-      this.profiles = profiles
-      return beaker.drives.list()
-    }).then(drives => {
-      drives = drives.filter(d => !this.profiles.find(p => p.url === d.url))
-      drives.sort((a, b) => (a.info.title||'').localeCompare(b.info.title||''))
-      this.drives = drives
-    })
+    // TEMP just give up if not hyper
+    if (!loc.getUrl().startsWith('hyper://')) {
+      return window.close()
+    }
 
     // read location information
     var drive = beaker.hyperdrive.drive(loc.getOrigin())
@@ -300,7 +290,7 @@ export class ExplorerApp extends LitElement {
       }
       if (stat.mount) {
         mount = await this.attempt(
-          `Reading drive information (${stat.mount.key}) for parent mount at ${path}`,
+          `Reading site information (${stat.mount.key}) for parent mount at ${path}`,
           () => beaker.hyperdrive.drive(stat.mount.key).getInfo()
         )
       }
@@ -329,7 +319,7 @@ export class ExplorerApp extends LitElement {
       item.realUrl = joinPath(item.drive.url, item.realPath)
       if (item.stat.mount) {
         item.mount = await this.attempt(
-          `Reading drive information (${item.stat.mount.key}) for mounted drive at ${item.path}`,
+          `Reading site information (${item.stat.mount.key}) for mounted site at ${item.path}`,
           () => beaker.hyperdrive.drive(item.stat.mount.key).getInfo()
         )
       }
@@ -440,7 +430,7 @@ export class ExplorerApp extends LitElement {
 
   render () {
     return html`
-      <link rel="stylesheet" href="/css/font-awesome.css">
+      <link rel="stylesheet" href="beaker://explorer/css/font-awesome.css">
       <div
         class=${classMap({
           layout: true,
@@ -462,7 +452,6 @@ export class ExplorerApp extends LitElement {
         ${this.loadingState === LOADING_STATES.INITIAL
           ? this.renderInitialLoading()
           : html`
-            ${this.renderLeftNav()}
             <main @contextmenu=${this.onContextmenuLayout}>
               ${this.renderHeader()}
               ${this.loadingState === LOADING_STATES.CONTENT ? html`
@@ -517,6 +506,9 @@ export class ExplorerApp extends LitElement {
           }
           <span class="fas fa-fw fa-caret-down"></span>
         </button>
+        ${this.attachedPane ? html`
+          <button class="transparent" @click=${window.close}><span class="fas fa-times"></span></button>
+        ` : ''}
       </div>
     `
   }
@@ -569,32 +561,6 @@ export class ExplorerApp extends LitElement {
         .pathInfo=${this.pathInfo}
         .selection=${this.selection}
       ></explorer-view-file>
-    `
-  }
-  
-  renderLeftNav () {
-    const navItem = (url, title) => html`
-      <a
-        class=${classMap({current: url.startsWith(this.currentDriveInfo.url)})}
-        href="/${url.slice('hyper://'.length)}"
-        title=${title}
-      >${title}</a>
-    `
-    return html`
-      <nav class="left">
-        <section class="transparent drives-list">
-          ${navItem('hyper://system/', 'My System Drive')}
-          ${!this.profiles ? html`` : html`
-            ${repeat(this.profiles, profile => navItem(profile.url, profile.title))}
-          `}
-          ${!this.drives ? html`<span>Loading...</span>` : html`
-            <h5>My Drives</h4>
-            ${repeat(this.drives.filter(d => d.info.writable), drive => navItem(drive.url, drive.info.title))}
-            <h5>Cohosting</h4>
-            ${repeat(this.drives.filter(d => !d.info.writable), drive => navItem(drive.url, drive.info.title))}
-          `}
-        </section>
-      </nav>
     `
   }
 
@@ -807,7 +773,7 @@ export class ExplorerApp extends LitElement {
   async onNewMount (e) {
     if (!this.currentDriveInfo.writable) return
     var drive = beaker.hyperdrive.drive(this.currentDriveInfo.url)
-    var targetUrl = await beaker.shell.selectDriveDialog({title: 'Select a drive'})
+    var targetUrl = await beaker.shell.selectDriveDialog({title: 'Select a site'})
     var target = beaker.hyperdrive.drive(targetUrl)
     var info = await target.getInfo()
     var name = await getAvailableName(drive, this.realPathname, info.title)
@@ -823,7 +789,7 @@ export class ExplorerApp extends LitElement {
 
   async onForkDrive (e) {
     var drive = await beaker.hyperdrive.forkDrive(this.currentDriveInfo.url)
-    toast.create('Drive created')
+    toast.create('Site created')
     loc.setUrl(drive.url)
   }
 
@@ -983,7 +949,7 @@ export class ExplorerApp extends LitElement {
         top: (e.detail.y > document.body.scrollHeight / 2),
         roomy: false,
         noBorders: true,
-        fontAwesomeCSSUrl: '/css/font-awesome.css',
+        fontAwesomeCSSUrl: 'beaker://explorer/css/font-awesome.css',
         style: `padding: 4px 0`,
         items: items.filter(item => !item.ctxOnly)
       })

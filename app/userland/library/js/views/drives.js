@@ -26,10 +26,11 @@ export class DrivesView extends LitElement {
   constructor () {
     super()
     this.drives = undefined
-    this.readonly = false
+    this.readonly = undefined
     this.filter = undefined
     this.showHeader = false
     this.hideEmpty = false
+    this.load()
   }
 
   async load () {
@@ -50,14 +51,16 @@ export class DrivesView extends LitElement {
       }
       return true
     })
-    drives = drives.filter(drive => {
-      if (this.readonly) {
-        return !drive.info.writable
-      } else {
-        return drive.info.writable || drive.hasWritableFork
-      }
-    })
-    drives.sort((a, b) => (a.info.title).localeCompare(b.info.title))
+    if (typeof this.readonly !== 'undefined') {
+      drives = drives.filter(drive => {
+        if (this.readonly) {
+          return !drive.info.writable
+        } else {
+          return drive.info.writable || drive.hasWritableFork
+        }
+      })
+    }
+    drives.sort((a, b) => (a.info.title.localeCompare(b.info.title)))
     console.log(drives)
 
     this.drives = drives
@@ -157,16 +160,13 @@ export class DrivesView extends LitElement {
         ` : ''}
         <div class="drives">
           ${repeat(drives, drive => this.renderDrive(drive))}
-          ${drives.length === 0 && !this.hideEmpty ? html`
-            ${this.readonly ? html`
-              <div class="empty"><span class="fas fa-share-alt" style="margin-bottom: 30px"></span><div>Not currently hosting any Hyperdrives</div></div>
+          ${drives.length === 0 ?
+            this.filter ? html`
+              <div class="empty"><div>No matches found for "${this.filter}".</div></div>
             ` : html`
-              <div class="empty"><span class="fas fa-hdd"></span><div>Click "New Drive" to create a Hyperdrive</div></div>
-            `}
-          ` : ''}
-          ${drives.length === 0 && this.filter ? html`
-            <div class="empty"><div>No matches found for "${this.filter}".</div></div>
-          ` : ''}
+              <div class="empty"><span class="fas fa-sitemap"></span><div>You have not created any Hyperdrives.</div></div>
+            `
+          : ''}
         </div>
       ` : html`
         <div class="loading"><span class="spinner"></span></div>
@@ -176,6 +176,21 @@ export class DrivesView extends LitElement {
 
   renderDrive (drive) {
     var numForks = drive.forks?.length || 0
+    if (this.hasAttribute('simple')) {
+      return html`
+        <a
+          href=${drive.url}
+          title=${drive.info.title || 'Untitled'}
+          class="${classMap({drive: true})}"
+          @contextmenu=${e => this.onContextmenuDrive(e, drive)}
+        >
+          <img class="favicon" src="asset:favicon:${drive.url}">
+          <div class="title">
+            ${drive.info.title || html`<em>Untitled</em>`}
+          </div>
+        </a>
+      `
+    }
     return html`
       <a
         href=${drive.url}
@@ -186,14 +201,13 @@ export class DrivesView extends LitElement {
         <img class="favicon" src="asset:favicon:${drive.url}">
         <div class="title">
           ${drive.info.title || html`<em>Untitled</em>`}
+          ${drive.forkOf?.label ? html`[${drive.forkOf.label}]` : ''}
+          ${drive.tags.map(tag => html`<span class="tag">${tag}</span>`)}
         </div>
         <div class="description">
-          ${drive.forkOf ? html`
-            <span class="fork-label">${drive.forkOf.label || 'no label'}</span></div>
-          ` : ''}
-          ${!drive.info.writable ? html`<span class="readonly">readonly</span>` : ''}
           ${drive.info.description.slice(0, 50)}
         </div>
+        <div class="owner">${drive.info.writable ? 'Mine' : ''}</div>
         <div class="forks">
           ${numForks > 0 ? html`
             <a @click=${e => this.onClickViewForksOf(e, drive)} href="#">

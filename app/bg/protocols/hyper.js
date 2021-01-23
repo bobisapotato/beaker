@@ -92,7 +92,47 @@ export function register (protocol) {
 }
 
 export const protocolHandler = async function (request, respond) {
+  var drive
+  var cspHeader = undefined
+  var corsHeader = '*'
+  var customFrontend = false
+  var wantsHTML = mime.acceptHeaderWantsHTML(request.headers.Accept)
+  const logUrl = toNiceUrl(request.url)
+
   respond = once(respond)
+  const respondBuiltinFrontend = async () => {
+    return respond({
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'text/html',
+        'Access-Control-Allow-Origin': corsHeader,
+        'Allow-CSP-From': '*',
+        'Cache-Control': 'no-cache',
+        'Content-Security-Policy': `default-src beaker:; img-src * data: asset: blob:; media-src * data: asset: blob:; style-src beaker: 'unsafe-inline';`,
+        'Beaker-Trusted-Interface': '1' // see wc-trust.js
+      },
+      data: intoStream(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="beaker://app-stdlib/css/fontawesome.css">
+    <script type="module" src="beaker://drive-view/index.js"></script>
+  </head>
+</html>`)
+    })
+  }
+  const respondCustomFrontend = async (checkoutFS) => {
+    return respond({
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'text/html',
+        'Access-Control-Allow-Origin': corsHeader,
+        'Allow-CSP-From': '*',
+        'Content-Security-Policy': cspHeader
+      },
+      data: intoStream(await checkoutFS.pda.readFile('/.ui/ui.html')) // TODO use stream
+    })
+  }
   const respondRedirect = (url) => {
     respond({
       statusCode: 200,
@@ -112,7 +152,7 @@ export const protocolHandler = async function (request, respond) {
         headers: {
           'Content-Type': 'text/html',
           'Content-Security-Policy': "default-src 'unsafe-inline' beaker:;",
-          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Origin': corsHeader,
           'Allow-CSP-From': '*'
         },
         data: intoStream(errorPage(errorPageInfo || (code + ' ' + status)))
@@ -121,9 +161,6 @@ export const protocolHandler = async function (request, respond) {
       respond({statusCode: code})
     }
   }
-  var drive
-  var cspHeader = undefined
-  const logUrl = toNiceUrl(request.url)
 
   // validate request
   logger.silly(`Starting ${logUrl}`, {url: request.url})
@@ -166,13 +203,7 @@ export const protocolHandler = async function (request, respond) {
 
   // protect the system drive
   if (filesystem.isRootUrl(`hyper://${driveKey}/`)) {
-    // HACK
-    // electron's CORS protection doesnt seem to be working
-    // so we're going to handle all system-drive requests by redirecting
-    // to the files explorer
-    // -prf
-    logger.silly(`Redirecting to explorer ${logUrl}`, {url: request.url})
-    return respondRedirect(`beaker://explorer/${urlp.host}${urlp.version ? ('+' + urlp.version) : ''}${urlp.pathname || ''}`)
+    corsHeader = undefined
   }
 
   auditLog.record('-browser', 'serve', {url: urlp.origin, path: urlp.pathname}, undefined, async () => {
@@ -207,9 +238,9 @@ export const protocolHandler = async function (request, respond) {
     var version = await checkoutFS.session.drive.version()
     if (version === 0) {
       logger.silly(`Drive not found ${logUrl}`, {url: request.url})
-      return respondError(404, 'Hyperdrive not found', {
-        title: 'Hyperdrive Not Found',
-        errorDescription: 'No peers hosting this drive were found',
+      return respondError(404, 'Site not found', {
+        title: 'Site Not Found',
+        errorDescription: 'No peers hosting this site were found',
         errorInfo: 'You may still be connecting to peers - try reloading the page.'
       })
     }
@@ -220,21 +251,8 @@ export const protocolHandler = async function (request, respond) {
     }
 
     // check for the presence of a frontend
-    var frontend = false
     if (await checkoutFS.pda.stat('/.ui/ui.html').catch(e => false)) {
-      frontend = true
-    }
-    const serveFrontendHTML = async () => {
-      return respond({
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'text/html',
-          'Access-Control-Allow-Origin': '*',
-          'Allow-CSP-From': '*',
-          'Content-Security-Policy': cspHeader
-        },
-        data: intoStream(await checkoutFS.pda.readFile('/.ui/ui.html')) // TODO use stream
-      })
+      customFrontend = true
     }
 
     // lookup entry
@@ -243,7 +261,7 @@ export const protocolHandler = async function (request, respond) {
     var entry = await datServeResolvePath(checkoutFS.pda, manifest, urlp, request.headers.Accept)
 
     var canExecuteHTML = true
-    if (entry && !frontend) {
+    if (entry && !customFrontend) {
       // dont execute HTML if in a mount and no frontend is running
       let pathParts = entry.path.split('/').filter(Boolean)
       pathParts.pop() // skip target, just need to check parent dirs
@@ -260,53 +278,40 @@ export const protocolHandler = async function (request, respond) {
 
     // handle folder
     if (entry && entry.isDirectory()) {
-
-      // make sure there's a trailing slash
       if (!hasTrailingSlash) {
+        // make sure there's a trailing slash
         logger.silly(`Redirecting to trailing slash ${logUrl}`, {url: request.url})
         return respondRedirect(`hyper://${urlp.host}${urlp.version ? ('+' + urlp.version) : ''}${urlp.pathname || ''}/${urlp.search || ''}`)
       }
-
-      // frontend
-      if (frontend) {
-        logger.silly(`Serving frontend ${logUrl}`, {url: request.url})
-        return serveFrontendHTML()
+      if (customFrontend) {
+        logger.silly(`Serving custom frontend ${logUrl}`, {url: request.url})
+        return respondCustomFrontend(checkoutFS)
       }
-
-      // directory listing
-      logger.silly(`Serving directory ${logUrl}`, {url: request.url})
-      return respond({
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'text/html',
-          'Access-Control-Allow-Origin': '*',
-          'Allow-CSP-From': '*',
-          'Cache-Control': 'no-cache',
-          'Content-Security-Policy': `default-src 'self' beaker:`
-        },
-        data: intoStream(`<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <link rel="stylesheet" href="beaker://app-stdlib/css/fontawesome.css">
-    <script type="module" src="beaker://drive-view/index.js"></script>
-  </head>
-</html>`)
-      })
+      logger.silly(`Serving builtin frontend ${logUrl}`, {url: request.url})
+      return respondBuiltinFrontend()
     }
 
-    // frontend
-    if (mime.acceptHeaderWantsHTML(request.headers.Accept) && frontend) {
-      logger.silly(`Serving frontend ${logUrl}`, {url: request.url})
-      return serveFrontendHTML()
+    // custom frontend
+    if (customFrontend && wantsHTML) {
+      logger.silly(`Serving custom frontend ${logUrl}`, {url: request.url})
+      return respondCustomFrontend(checkoutFS)
     }
 
-    // handle not found
+    // 404
     if (!entry) {
       logger.silly('Not found', {url: request.url})
+      // try to establish what the issue is
+      let res = await checkoutFS.pda.stat('/.ui/ui.html').catch(err => ({err}))
+      if (res?.err && /(not available|connectable)/i.test(res?.err.toString())) {
+        return respondError(404, 'File Not Available', {
+          errorDescription: 'File Not Available',
+          errorInfo: `Beaker could not find any peers to access ${urlp.path}`,
+          title: 'File Not Available'
+        })
+      }
       return respondError(404, 'File Not Found', {
         errorDescription: 'File Not Found',
-        errorInfo: `Beaker could not find the file ${urlp.path}`,
+        errorInfo: `Beaker could not find the file at ${urlp.path}`,
         title: 'File Not Found'
       })
     }
@@ -320,6 +325,15 @@ export const protocolHandler = async function (request, respond) {
       } catch (e) {
         // pass through
       }
+    }
+
+    // detect mimetype
+    var mimeType = entry.metadata.mimetype || entry.metadata.mimeType
+    if (!mimeType) {
+      mimeType = mime.identify(entry.path)
+    }
+    if (!canExecuteHTML && mimeType.includes('text/html')) {
+      mimeType = 'text/plain'
     }
 
     // handle range
@@ -342,7 +356,7 @@ export const protocolHandler = async function (request, respond) {
 
     Object.assign(headers, {
       'Content-Security-Policy': cspHeader,
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': corsHeader,
       'Allow-CSP-From': '*',
       'Cache-Control': 'no-cache'
     })
@@ -356,6 +370,18 @@ export const protocolHandler = async function (request, respond) {
 <html>
   <head>
     <meta charset="utf8">
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 0 10px;
+        line-height: 1.4;
+      }
+      body * {
+        max-width: 100%;
+      }
+    </style>
   </head>
   <body>
     ${md.render(content)}
@@ -374,7 +400,7 @@ export const protocolHandler = async function (request, respond) {
     if (!mimeType) {
       let chunk;
       for await (const part of checkoutFS.session.drive.createReadStream(entry.path, { start: 0, length: 512 })) {
-        chunk = chunk ? Buffer.concat(chunk, part) : part;
+        chunk = chunk ? Buffer.concat([chunk, part]) : part;
       }
       mimeType = mime.identify(entry.path, chunk)
     }

@@ -1,15 +1,16 @@
-import { app, BrowserView } from 'electron'
+import { app, BrowserView, nativeTheme } from 'electron'
 import errorPage from '../../lib/error-page'
 import path from 'path'
 import { promises as fs } from 'fs'
 import { EventEmitter } from 'events'
 import _throttle from 'lodash.throttle'
-import { parseDriveUrl } from '../../../lib/urls'
+import { parseDriveUrl, stripUrlHash } from '../../../lib/urls'
 import { toNiceUrl } from '../../../lib/strings'
 import _get from 'lodash.get'
 import _pick from 'lodash.pick'
 import * as zoom from './zoom'
 import * as modals from '../subwindows/modals'
+import * as overlay from '../subwindows/overlay'
 import * as windowMenu from '../window-menu'
 import { getResourceContentType } from '../../browser'
 import { DRIVE_KEY_REGEX } from '../../../lib/strings'
@@ -65,7 +66,7 @@ const STATE_VARS = [
   'siteIcon',
   'siteTrust',
   'driveDomain',
-  'isSystemDrive',
+  'driveIdent',
   'writable',
   'folderSyncPath',
   'peers',
@@ -85,9 +86,13 @@ const STATE_VARS = [
   'currentInpageFindString',
   'currentInpageFindResults',
   'donateLinkHref',
-  'isLiveReloading',
-  'tabCreationTime'
+  'isLiveReloading'
 ]
+
+// globals
+// =
+
+var _hasSeenCommentsTip = undefined
 
 // classes
 // =
@@ -101,6 +106,7 @@ export class Pane extends EventEmitter {
         preload: path.join(__dirname, 'fg', 'webview-preload', 'index.build.js'),
         nodeIntegrationInSubFrames: true,
         contextIsolation: true,
+        worldSafeExecuteJavaScript: false, // TODO- this causes promises to fail in executeJavaScript, need to file an issue with electron
         webviewTag: false,
         sandbox: true,
         defaultEncoding: 'utf-8',
@@ -175,7 +181,7 @@ export class Pane extends EventEmitter {
   }
 
   get id () {
-    return this.browserView.id
+    return this.webContents.id
   }
 
   get webContents () {
@@ -196,7 +202,7 @@ export class Pane extends EventEmitter {
 
   get title () {
     var title = this.webContents.getTitle()
-    if (this.driveInfo && this.driveInfo.title && (!title || toOrigin(title) === this.origin)) {
+    if ((!title || toOrigin(title) === this.origin) && this.driveInfo?.title) {
       // fallback to the index.json title field if the page doesnt provide a title
       title = this.driveInfo.title
     }
@@ -214,14 +220,8 @@ export class Pane extends EventEmitter {
         hostname = hostname.replace(/\+[\d]+/, '')
       }
       if (this.driveInfo) {
-        var ident = _get(this.driveInfo, 'ident', {})
-        if (ident.system) {
-          return 'My System Drive'
-        }
-        if (this.driveInfo.writable || ident.contact) {
-          if (this.driveInfo.title) {
-            return this.driveInfo.title
-          }
+        if (this.driveInfo.ident?.system) {
+          return 'My Private Drive'
         }
       }
       if (urlp.protocol === 'beaker:') {
@@ -251,12 +251,11 @@ export class Pane extends EventEmitter {
 
   get siteIcon () {
     if (this.driveInfo) {
-      var ident = this.driveInfo.ident || {}
-      if (ident.contact || ident.profile) {
+      if (this.driveInfo.ident?.profile) {
         return 'fas fa-user-circle'
       }
-      if (this.driveInfo.writable) {
-        return 'fas fa-check-circle'
+      if (this.driveInfo.ident?.system) {
+        return 'fas fa-lock'
       }
     }
     var url = this.loadingURL || this.url
@@ -266,7 +265,7 @@ export class Pane extends EventEmitter {
     if (url.startsWith('beaker:')) {
       return 'beaker-logo'
     }
-    return 'fas fa-info-circle'
+    // return 'fas fa-info-circle'
   }
 
   get siteTrust () {
@@ -282,7 +281,7 @@ export class Pane extends EventEmitter {
         return 'untrusted'
       }
       if (urlp.protocol === 'hyper:' && this.driveInfo) {
-        if (this.driveInfo.writable || this.driveInfo.ident.internal || this.driveInfo.ident.contact) {
+        if (this.driveInfo.ident?.internal) {
           return 'trusted'
         }
       }
@@ -295,8 +294,10 @@ export class Pane extends EventEmitter {
     return _get(this.driveInfo, 'domain', '')
   }
 
-  get isSystemDrive () {
-    return _get(this.driveInfo, 'ident.system', false)
+  get driveIdent () {
+    if (this.driveInfo?.ident?.system) return 'system'
+    if (this.driveInfo?.ident?.profile) return 'profile'
+    return ''
   }
 
   get writable () {
@@ -340,6 +341,9 @@ export class Pane extends EventEmitter {
 
   setTab (tab) {
     this.tab = tab
+    if (this.tab !== tab) {
+      this.setAttachedPane(undefined)
+    }
   }
 
   // management
@@ -347,6 +351,10 @@ export class Pane extends EventEmitter {
 
   loadURL (url, opts = undefined) {
     this.webContents.loadURL(url, opts)
+  }
+
+  reload () {
+    this.webContents.reload()
   }
 
   setBounds (bounds) {
@@ -376,9 +384,12 @@ export class Pane extends EventEmitter {
   }
 
   destroy () {
+    if (this.url && !this.url.startsWith('beaker://')) {
+      historyDb.addTabClose(0, {url: this.url, title: this.title})
+    }
     this.hide()
     this.stopLiveReloading()
-    this.browserView.destroy()
+    this.browserView.webContents.destroy()
     this.emit('destroyed')
   }
 
@@ -411,14 +422,14 @@ export class Pane extends EventEmitter {
   }
 
   transferWindow (targetWindow) {
-    this.deactivate()
+    this.hide()
     this.browserWindow = targetWindow
   }
 
   async updateHistory () {
     var url = this.url
     var title = this.title
-    if (url !== 'beaker://desktop/' && url !== 'beaker://history/') {
+    if (url && !url.startsWith('beaker://')) {
       historyDb.addVisit(0, {url, title})
     }
   }
@@ -472,9 +483,8 @@ export class Pane extends EventEmitter {
   }
 
   setInpageFindString (str, dir) {
-    var findNext = this.currentInpageFindString === str
     this.currentInpageFindString = str
-    this.webContents.findInPage(this.currentInpageFindString, {findNext, forward: dir !== -1})
+    this.webContents.findInPage(this.currentInpageFindString, {findNext: true, forward: dir !== -1})
   }
 
   moveInpageFind (dir) {
@@ -705,7 +715,7 @@ export class Pane extends EventEmitter {
 
   async onDidNavigate (e, url, httpResponseCode) {
     // remove any active subwindows
-    modals.close(this.browserView)
+    modals.close(this.tab)
 
     // read zoom
     zoom.setZoomFromSitedata(this)
@@ -716,8 +726,10 @@ export class Pane extends EventEmitter {
     this.isReceivingAssets = true
     this.favicons = null
     this.frameUrls = {[this.mainFrameId]: url} // drop all non-main-frame URLs
-    await this.fetchIsBookmarked()
-    await this.fetchDriveInfo()
+    await Promise.all([
+      this.fetchIsBookmarked(),
+      this.fetchDriveInfo()
+    ])
     if (httpResponseCode === 504 && url.startsWith('hyper://')) {
       this.wasDriveTimeout = true
     }
@@ -738,6 +750,11 @@ export class Pane extends EventEmitter {
     this.isLoading = false
     this.loadingURL = null
     this.isReceivingAssets = false
+
+    if (!this.url) {
+      // aborted load on a new tab
+      this.loadURL('about:blank')
+    }
 
     // run custom renderer apps
     this.injectCustomRenderers()
@@ -803,8 +820,8 @@ export class Pane extends EventEmitter {
 
     if (this.favicons) {
       let url = this.url
-      this.webContents.executeJavaScriptInIsolatedWorld(998, [{code: `
-        (async function () {
+      this.webContents.executeJavaScriptInIsolatedWorld(999, [{code: `
+        new Promise(async (resolve) => {
           var img = await new Promise(resolve => {
             var img = new Image()
             img.crossOrigin = 'Anonymous'
@@ -812,7 +829,7 @@ export class Pane extends EventEmitter {
             img.onerror = () => resolve(false)
             img.src = "${this.favicons[0]}"
           })
-          if (!img) return
+          if (!img) return resolve(undefined)
             
           let {width, height} = img
           var ratio = width / height
@@ -823,11 +840,11 @@ export class Pane extends EventEmitter {
           canvas.height = height
           var ctx = canvas.getContext('2d')
           ctx.drawImage(img, 0, 0, width, height)
-          return canvas.toDataURL('image/png')
-        })()
+          resolve(canvas.toDataURL('image/png'))
+        })
       `}]).then((dataUrl, err) => {
         if (err) console.log(err)
-        else {
+        else if (dataUrl) {
           sitedataDb.set(url, 'favicon', dataUrl)
         }
       })
@@ -839,7 +856,7 @@ export class Pane extends EventEmitter {
   onNewWindow (e, url, frameName, disposition, options) {
     e.preventDefault()
     if (!this.isActive || !this.tab) return // only open if coming from the active pane
-    var setActive = disposition === 'foreground-tab'
+    var setActive = disposition === 'foreground-tab' || disposition === 'new-window'
     var setActiveBySettings = !setActive
     this.tab.createTab(url, {setActive, setActiveBySettings, adjacentActive: true})
   }
@@ -852,7 +869,7 @@ export class Pane extends EventEmitter {
     // -prf
     e.preventDefault()
     if (!this.tab) return
-    this.tab.createTab(url, {setActiveBySettings: true, adjacentActive: true})
+    this.tab.createTab(url, {setActive: true, adjacentActive: true})
   }
 
   onMediaChange (e) {

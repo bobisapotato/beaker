@@ -59,9 +59,17 @@ class EditorApp extends LitElement {
     return this.origin + this.resolvedPath
   }
 
+  get resolvedDirname () {
+    return '/' + (this.resolvedPath || '').split('/').filter(Boolean).slice(0, -1).join('/')
+  }
+
   get hasFileExt () {
     var path = this.pathname
     return path.split('/').pop().includes('.')
+  }
+
+  get isPrivate () {
+    return this.url.startsWith('hyper://private/')
   }
 
   get hasChanges () {
@@ -94,15 +102,17 @@ class EditorApp extends LitElement {
 
     beaker.panes.addEventListener('pane-attached', e => {
       this.attachedPane = beaker.panes.getAttachedPane()
+      this.requestUpdate()
       if (this.url !== this.attachedPane.url) {
         this.load(this.attachedPane.url)
       }
     })
     beaker.panes.addEventListener('pane-detached', e => {
       this.attachedPane = undefined
+      this.requestUpdate()
     })
     beaker.panes.addEventListener('pane-navigated', e => {
-      if (this.url !== e.detail.url) {
+      if (!this.url || this.dne) {
         this.load(e.detail.url)
       }
     })
@@ -140,6 +150,33 @@ class EditorApp extends LitElement {
     if (!this.editorEl) {
       this.editorEl = document.createElement('div')
       this.editorEl.id = 'monaco-editor'
+      this.editorEl.addEventListener('contextmenu', async e => {
+        var choice = await beaker.browser.showContextMenu([
+          {id: 'cut', label: 'Cut'},
+          {id: 'copy', label: 'Copy'},
+          {id: 'paste', label: 'Paste'},
+          {type: 'separator'},
+          {id: 'selectAll', label: 'Select All'},
+          {type: 'separator'},
+          {id: 'undo', label: 'Undo'},
+          {id: 'redo', label: 'Redo'},
+        ])
+        switch (choice) {
+          case 'cut':
+          case 'copy':
+          case 'paste':
+            this.editor.focus()
+            document.execCommand(choice)
+            break
+          case 'selectAll':
+            this.editor.setSelection(this.editor.getModel().getFullModelRange())
+            break
+          case 'undo':
+          case 'redo':
+            this.editor.trigger('contextmenu', choice)
+            break
+        }
+      })
     }
     this.append(this.editorEl)
   }
@@ -156,24 +193,26 @@ class EditorApp extends LitElement {
           monaco.languages.register(jsLang)
         }
 
+
         // we have load monaco outside of the shadow dom
         monaco.editor.defineTheme('custom-dark', {
           base: 'vs-dark',
           inherit: true,
-          rules: [{ background: '222233' }],
+          rules: [{ background: '222222' }],
           colors: {
-            'editor.background': '#222233'
+            'editor.background': '#222222'
           }
         })
         let opts = {
-          folding: false,
-          renderLineHighlight: 'all',
-          lineNumbersMinChars: 4,
           automaticLayout: true,
+          contextmenu: false,
           fixedOverflowWidgets: true,
-          roundedSelection: false,
+          folding: false,
+          lineNumbersMinChars: 4,
           links: false,
           minimap: {enabled: false},
+          renderLineHighlight: 'all',
+          roundedSelection: false,
           theme: 'custom-dark',
           value: ''
         }
@@ -224,18 +263,16 @@ class EditorApp extends LitElement {
       }
       this.url = url
       history.replaceState({}, '', `/?url=${url}`)
-      this.attachedPane = beaker.panes.getAttachedPane()
-      if (this.attachedPane && this.attachedPane.url !== this.url) {
-        beaker.panes.navigate(this.attachedPane.id, this.url)
-      }
 
       this.resetEditor()
       console.log('Loading', url)
 
+      this.stat = undefined
       var body = ''
       try {
         if (url.startsWith('hyper:')) {
           body = await this.loadDrive(url)
+          this.isFilesOpen = !body
         } else if (url.startsWith('http:') || url.startsWith('https:')) {
           this.isFilesOpen = false
           body = await beaker.browser.fetchBody(url)
@@ -562,7 +599,7 @@ class EditorApp extends LitElement {
       ` : this.dne ? html`
         <div class="empty">
           <a @click=${e => { this.isFilesOpen = true }}>Select a file</a>
-          ${!this.readOnly ? html` or <a @click=${e => { this.onClickNewFile(this.resolvedPath) }}>Create a file</a>` : ''}
+          ${!this.readOnly ? html` or <a @click=${e => { this.onClickNewFile(this.resolvedDirname, this.resolvedFilename) }}>Create a file</a>` : ''}
         </div>
       ` : ''}
       ${this.showLoadingNotice ? html`<div id="loading-notice">Loading...</div>` : ''}
@@ -582,25 +619,29 @@ class EditorApp extends LitElement {
     return html`
       <div class="toolbar">
         <button class="transparent" @click=${this.onToggleFilesOpen} ?disabled=${this.isUnloaded}>
-          <span class="fas fa-fw fa-ellipsis-h"></span>
+          <span class="fas fa-fw fa-columns"></span>
         </button>
         <span class="divider"></span>
-        <button title="Open..." @click=${this.onClickOpen}>
-          <span class="far fa-fw fa-folder-open"></span> Open...
-        </button>
         ${!this.readOnly ? html`
           <button id="save-btn" title="Save" @click=${this.onClickSave} ?disabled=${this.dne || !this.hasChanges}>
             <span class="fas fa-fw fa-save"></span> Save
           </button>
+          <button title="Rename" @click=${e => this.onClickRename(this.resolvedPath)} ?disabled=${this.dne}>
+            <span class="fas fa-fw fa-i-cursor"></span> Rename
+          </button>
+          <button title="Delete" @click=${e => this.onClickDelete(this.resolvedPath)} ?disabled=${this.dne}>
+            <span class="far fa-fw fa-trash-alt"></span> Delete
+          </button>
         ` : ''}
-        <button title="View file" @click=${this.onClickView} ?disabled=${this.dne || this.isUnloaded}>
-          <span class="far fa-fw fa-window-maximize"></span> View file
+        <button title="Actions" @click=${this.onClickActions}>
+          <span class="fas fa-fw fa-ellipsis-h"></span>
         </button>
+        <span class="divider"></span>
         ${this.isLoading ? html`
-          <div><span class="fas fa-fw fa-info-circle"></span> Loading...</div>
+          <div class="text"><span class="fas fa-fw fa-info-circle"></span> Loading...</div>
           <span class="divider"></span>
         ` : this.readOnly && !this.isUnloaded ? html`
-          <div><span class="fas fa-fw fa-info-circle"></span> This site is read-only</div>
+          <div class="text"><span class="fas fa-fw fa-info-circle"></span> This site is read-only</div>
           <span class="divider"></span>
           ${this.mountInfo && this.mountInfo.writable ? html`
             <span style="margin-left: 8px">You own this file</span>
@@ -609,14 +650,16 @@ class EditorApp extends LitElement {
             </button>
           ` : ''}
         ` : ''}
-        <span class="spacer"></span>
         <button id="file-metadata-btn" title="File Metadata" ?disabled=${!this.stat} @click=${this.onClickFileMetadata}>
-          File Metadata <span class="fas fa-fw fa-caret-down"></span>
+          Metadata <span class="fas fa-fw fa-caret-down"></span>
         </button>
-        ${!this.readOnly ? html`
-          <button class="primary" title="Actions" @click=${this.onClickActions}>
-            Actions <span class="fas fa-caret-down"></span>
-          </button>
+        <span class="divider"></span>
+        <button title="View file" @click=${this.onClickView} ?disabled=${this.dne || this.isUnloaded}>
+          <span class="far fa-fw fa-window-maximize"></span> View file
+        </button>
+        <span class="spacer"></span>
+        ${this.attachedPane ? html`
+          <button @click=${window.close}><span class="fas fa-times"></span></button>
         ` : ''}
       </div>
     `
@@ -654,26 +697,15 @@ class EditorApp extends LitElement {
     let rect = e.currentTarget.getClientRects()[0]
     el.classList.add('active')
     await contextMenu.create({
-      x: rect.right,
+      x: (rect.left + rect.right) / 2,
       y: rect.bottom,
-      right: true,
+      center: true,
       fontAwesomeCSSUrl: 'beaker://assets/font-awesome.css',
       noBorders: true,
       roomy: true,
+      rounded: true,
+      style: 'padding: 4px 0',
       items: [
-        {
-          icon: 'fa fa-fw fa-i-cursor',
-          label: 'Rename',
-          disabled: this.dne || this.readOnly,
-          click: () => this.onClickRename(this.resolvedPath)
-        },
-        {
-          icon: 'fa fa-fw fa-trash',
-          label: 'Delete',
-          disabled: this.dne || this.readOnly,
-          click: () => this.onClickDelete(this.resolvedPath)
-        },
-        '-',
         {
           icon: 'fas fa-fw fa-file-export',
           label: 'Export',
@@ -700,10 +732,10 @@ class EditorApp extends LitElement {
     let rect = e.currentTarget.getClientRects()[0]
     el.classList.add('active')
     await contextMenu.create({
-      x: rect.right,
+      x: (rect.left + rect.right) / 2,
       y: rect.bottom,
       render: () => {
-        var entries = Object.entries(this.stat.metadata)
+        var entries = Object.entries(this.stat.metadata).filter(([key]) => key !== 'type')
         if (!this.readOnly) entries = entries.concat([['', '']])
         const onClickSaveMetadata = async (e) => {
           var metadataEl = e.currentTarget.parentNode
@@ -724,27 +756,37 @@ class EditorApp extends LitElement {
           this.stat.metadata = newMetadata
           contextMenu.destroy()
         }
+        const onChange = e => {
+          e.target.getRootNode().querySelector('button').removeAttribute('disabled')
+        }
         return html`
+          <link rel="stylesheet" href="beaker://assets/font-awesome.css">
           <style>
           .dropdown-items {
-            padding: 6px;
+            padding: 12px;
             border: 0;
           }
           .metadata {
+            position: relative;
             width: 100%;
-            border-bottom: 1px solid #ccd;
           }
           .metadata .entry {
             display: flex;
             border: 1px solid #ccd;
             border-bottom: 0;
           }
+          .metadata.readonly .entry:last-child {
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
+            border-bottom: 1px solid #ccd;
+            overflow: hidden;
+          }
           .metadata input {
             box-sizing: border-box;
             border: 0;
             border-radius: 0;
             height: 22px;
-            padding: 0 4px;
+            padding: 1px 4px 0 6px;
           }
           .metadata input[name="key"] {
             border-right: 1px solid #ccd;
@@ -758,8 +800,8 @@ class EditorApp extends LitElement {
             display: block;
             width: 100%;
             cursor: pointer;
-            border-bottom-left-radius: 3px;
-            border-bottom-right-radius: 3px;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
             padding: 5px 10px;
             outline: 0px;
             color: rgb(255, 255, 255);
@@ -767,17 +809,28 @@ class EditorApp extends LitElement {
             background: rgb(82, 137, 247);
             border: 1px solid rgb(40, 100, 220);
           }
+          button:disabled {
+            background: #ddd;
+            color: #aaa;
+            border-color: #bbc;
+          }
+          button:disabled .fas {
+            display: none;
+          }
           </style>
-          <div class="dropdown-items right">
-            <div class="metadata">
+          <div class="dropdown-items center rounded">
+            <div class="metadata ${this.readOnly ? 'readonly' : ''}">
               ${repeat(entries, entry => `meta-${entry[0]}`, ([k, v]) => html`
                 <div class="entry">
-                  <input type="text" name="key" value=${k} ?disabled=${this.readOnly} placeholder="Key">
-                  <input type="text" name="value" value=${v} ?disabled=${this.readOnly} placeholder="Value">
+                  <input type="text" name="key" value=${k} ?disabled=${this.readOnly} placeholder="Key" @change=${onChange}>
+                  <input type="text" name="value" value=${v} ?disabled=${this.readOnly} placeholder="Value" @change=${onChange}>
                 </div>
               `)}
+              ${this.readOnly && entries.length === 0 ? html`
+                <div class="empty">No metadata</div>
+              ` : ''}
               ${!this.readOnly ? html`
-                <button class="primary" @click=${onClickSaveMetadata}><span class="fas fa-fw fa-check"></span> Save</button>
+                <button class="primary" @click=${onClickSaveMetadata} disabled><span class="fas fa-fw fa-check"></span> Save</button>
               ` : ''}
             </div>
           </div>
@@ -803,11 +856,6 @@ class EditorApp extends LitElement {
     }
   }
 
-  async onClickOpen () {
-    var url = await beaker.shell.selectDriveDialog()
-    if (url) this.load(url)
-  }
-
   async onClickSave () {
     if (this.readOnly) return
     var model = this.editor.getModel(this.url)
@@ -816,7 +864,8 @@ class EditorApp extends LitElement {
     await this.drive.writeFile(this.resolvedPath, model.getValue(), {metadata})
     this.lastSavedVersionId = model.getAlternativeVersionId()
     if (this.attachedPane) {
-      beaker.panes.navigate(this.attachedPane.id, this.url)
+      this.attachedPane = beaker.panes.getAttachedPane()
+      beaker.panes.navigate(this.attachedPane.id, this.attachedPane.url)
     }
     this.setSaveBtnState()
     this.setFocus()
@@ -833,9 +882,16 @@ class EditorApp extends LitElement {
 
     this.loadExplorer()
     if (this.resolvedPath === oldpath) {
-      var urlp = new URL(this.url)
+      let oldurl = this.url
+      let urlp = new URL(this.url)
       urlp.pathname = newpath
       this.load(urlp.toString())
+      if (this.attachedPane) {
+        this.attachedPane = beaker.panes.getAttachedPane()
+        if (this.attachedPane.url === oldurl) {
+          beaker.panes.navigate(this.attachedPane.id, urlp.toString())
+        }
+      }
     }
   }
 
@@ -852,6 +908,12 @@ class EditorApp extends LitElement {
       }
 
       this.loadExplorer()
+      if (this.attachedPane) {
+        this.attachedPane = beaker.panes.getAttachedPane()
+        if (this.attachedPane.url === this.url) {
+          beaker.panes.navigate(this.attachedPane.id, this.url)
+        }
+      }
       if (this.resolvedPath === path) {
         this.load(this.url)
       }
@@ -868,9 +930,9 @@ class EditorApp extends LitElement {
     }
   }
 
-  async onClickNewFile (folderPath) {
+  async onClickNewFile (folderPath, defaultName = '') {
     if (this.readOnly) return
-    var name = prompt('Enter the new file name')
+    var name = prompt('Enter the new file name', defaultName)
     if (name) {
       let path = joinPath(folderPath, name)
       await this.drive.writeFile(path, '')

@@ -31,6 +31,10 @@ button {
   border: 0;
 }
 
+.field-group:empty {
+  display: none;
+}
+
 .field-group > div {
   margin-bottom: 5px;
 }
@@ -49,5 +53,6 @@ button {
   top: 8px;
   right: 5px;
 }
+
 `
 export default cssStr

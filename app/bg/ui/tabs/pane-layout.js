@@ -16,9 +16,10 @@ export class PaneLayout extends EventEmitter {
       let b = this.bounds[id]
       state.push({
         id,
-        isActive: b.pane.isActive,
+        isActive: b.pane?.tab?.primaryPane === b.pane,
         isEdge: b.isEdge,
         bounds: {x: b.x, y: b.y, width: b.width, height: b.height},
+        url: b.pane.url,
         title: b.pane.title,
         status: b.pane.currentStatus,
         attachedPaneId: b.pane.attachedPane ? b.pane.attachedPane.id : undefined,
@@ -294,7 +295,7 @@ function insert (arr, item, after = undefined) {
     if (i !== -1) arr.splice(i + 1, 0, item)
     else arr.push(item)
   } else {
-    arr.push(item)
+    arr.unshift(item)
   }
 }
 

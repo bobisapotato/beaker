@@ -26,12 +26,12 @@ class Identity extends LitElement {
   render () {
     return html`
       <link rel="stylesheet" href="beaker://assets/font-awesome.css">
-      <div class="field-group">
-        ${this.cert ? html`
-          ${this.cert.type === 'beaker' ? html`
-            This is a builtin interface of Beaker
-          ` : ''}
-          ${this.cert.type === 'tls' ? html`
+      ${this.cert ? html`
+        ${this.cert.type === 'beaker' ? html`
+          <div class="field-group">This is a builtin interface of Beaker</div>
+        ` : ''}
+        ${this.cert.type === 'tls' ? html`
+          <div class="field-group">
             <div class="identity">
               <span class="fa-fw fas fa-address-card"></span>
               ${this.cert.subjectName}
@@ -39,47 +39,28 @@ class Identity extends LitElement {
             <div class="verifier">
               Issued by ${this.cert.issuerName}
             </div>
-          ` : ''}
-          ${this.cert.type === 'hyperdrive' ? html`
-            ${this.cert.ident.profile ? html`
+          </div>
+        ` : ''}
+        ${this.cert.type === 'hyperdrive' ? html`
+          ${this.cert.ident.profile ? html`
+            <div class="field-group">
               <div class="identity">
-                <span class="fa-fw fas fa-address-card"></span>
-                ${this.cert.driveInfo.title || 'Untitled'}
+                This is your profile site
               </div>
-              <div class="verifier">
-                This is your profile
-              </div>
-            ` : this.cert.ident.contact ? html`
-              <div class="identity">
-                <span class="fa-fw fas fa-address-card"></span>
-                ${this.cert.driveInfo.title || 'Untitled'}
-              </div>
-              <div class="verifier">
-                This drive is in your address book
-                <button class="transparent toggle-save-contact-btn" @click=${this.onToggleSaveContact}>
-                  <span class="fas fa-fw fa-user-times"></span> Remove
-                </button>
-              </div>
-            ` : this.cert.ident.system ? html`
-              <div class="identity">This is your system drive</div>
-            ` : this.cert.driveInfo.writable ? html`
-              <div class="identity">
-                ${this.cert.driveInfo.title || 'Untitled'}
-              </div>
-              <div class="verifier">
-                <span class="fa-fw fas fa-pen"></span> You created this drive</div>
-              </div>
-            ` : html`
-              No identity information found
-              <button class="transparent toggle-save-contact-btn" @click=${this.onToggleSaveContact}>
-                <span class="fas fa-fw fa-user-plus"></span> Add to Address Book
-              </button>
-            `}
-          ` : ''}
-        ` : html`
-          No identity information found
-        `}
-      </div>
+            </div>
+          ` : this.cert.ident.system ? html`
+            <div class="field-group"><div class="identity">This is your private drive</div></div>
+          ` : this.cert.driveInfo.writable ? html`
+            <div class="field-group">
+              <div class="identity">You created this Hyperdrive</div>
+            </div>
+          ` : html`
+            <div class="field-group">No identity information found</div>
+          `}
+        ` : ''}
+      ` : html`
+        <div class="field-group">No identity information found</div>
+      `}
     `
   }
 
@@ -99,16 +80,6 @@ class Identity extends LitElement {
 
   // events
   // =
-
-  async onToggleSaveContact (e) {
-    var isContact = this.cert && this.cert.ident ? this.cert.ident.contact : false
-    if (isContact) {
-      await beaker.contacts.remove(this.url)
-    } else {
-      await beaker.contacts.requestAddContact(this.url)
-    }
-    emit(this, 'change-url', {detail: {url: this.url}})
-  }
 }
 
 customElements.define('identity-signals', Identity)

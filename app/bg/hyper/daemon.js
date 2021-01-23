@@ -1,22 +1,22 @@
 import { app } from 'electron'
-import HyperdriveDaemon from 'hyperdrive-daemon'
-import * as HyperdriveDaemonManager from 'hyperdrive-daemon/manager'
-import { createMetadata } from 'hyperdrive-daemon/lib/metadata'
-import constants from 'hyperdrive-daemon-client/lib/constants'
-import { HyperdriveClient } from 'hyperdrive-daemon-client'
+import * as os from 'os'
+import * as p from 'path'
+import { promises as fs } from 'fs'
+import * as childProcess from 'child_process'
+import HyperdriveClient from 'hyperdrive-daemon-client'
 import datEncoding from 'dat-encoding'
 import * as pda from 'pauls-dat-api2'
-import pm2 from 'pm2'
 import EventEmitter from 'events'
-import { getEnvVar } from '../lib/env'
 import * as logLib from '../logger'
 const baseLogger = logLib.get()
 const logger = baseLogger.child({category: 'hyper', subcategory: 'daemon'})
 
 const SETUP_RETRIES = 100
-const CHECK_DAEMON_INTERVAL = 5e3
 const GARBAGE_COLLECT_SESSIONS_INTERVAL = 30e3
 const MAX_SESSION_AGE = 300e3 // 5min
+const HYPERSPACE_BIN_PATH = require.resolve('hyperspace/bin/index.js')
+const HYPERSPACE_STORAGE_DIR = p.join(os.homedir(), '.hyperspace', 'storage')
+const HYPERDRIVE_STORAGE_DIR = p.join(os.homedir(), '.hyperdrive', 'storage', 'cores')
 
 // typedefs
 // =
@@ -70,8 +70,8 @@ var isControllingDaemonProcess = false // did we start the process?
 var isSettingUp = true
 var isShuttingDown = false
 var isDaemonActive = false
-var isConnectionActive = false
 var isFirstConnect = true
+var daemonProcess = undefined
 var sessions = {} // map of keyStr => DaemonHyperdrive
 var events = new EventEmitter()
 
@@ -82,6 +82,10 @@ export const on = events.on.bind(events)
 
 export function getClient () {
   return client
+}
+
+export function getHyperspaceClient () {
+  return client._client
 }
 
 export function isActive () {
@@ -102,33 +106,6 @@ export async function getDaemonStatus () {
 export async function setup () {
   if (isSettingUp) {
     isSettingUp = false
-    pda.setInvalidAuthHandler(onInvalidAuthToken)
-
-    // watch for the daemon process to die/revive
-    let interval = setInterval(() => {
-      pm2.list((err, processes) => {
-        var processExists = !!processes.find(p => p.name === 'hyperdrive' && p.pm2_env.status === 'online')
-        if (processExists && !isDaemonActive) {
-          isDaemonActive = true
-          isFirstConnect = false
-          events.emit('daemon-restored')
-        } else if (!processExists && isDaemonActive) {
-          isDaemonActive = false
-          isConnectionActive = false
-          events.emit('daemon-stopped')
-        }
-      })
-    }, CHECK_DAEMON_INTERVAL)
-    interval.unref()
-
-    events.on('daemon-restored', async () => {
-      logger.info('Hyperdrive daemon has been restored')
-    })
-    events.on('daemon-stopped', async () => {
-      logger.info('Hyperdrive daemon has been lost')
-      isControllingDaemonProcess = false
-    })
-
     // periodically close sessions
     let interval2 = setInterval(() => {
       let numClosed = 0
@@ -145,13 +122,23 @@ export async function setup () {
       }
     }, GARBAGE_COLLECT_SESSIONS_INTERVAL)
     interval2.unref()
+
+    events.on('daemon-restored', async () => {
+      logger.info('Hyperdrive daemon has been restored')
+    })
+    events.on('daemon-stopped', async () => {
+      logger.info('Hyperdrive daemon has been lost')
+      isControllingDaemonProcess = false
+    })
   }
 
   try {
     client = new HyperdriveClient()
     await client.ready()
     logger.info('Connected to an external daemon.')
-    isConnectionActive = true
+    isDaemonActive = true
+    isFirstConnect = false
+    events.emit('daemon-restored')
     reconnectAllDriveSessions()
     return
   } catch (err) {
@@ -159,25 +146,35 @@ export async function setup () {
     client = false
   }
 
-  if (getEnvVar('EMBED_HYPERDRIVE_DAEMON')) {
-    await createMetadata(`localhost:${constants.port}`)
-    var daemon = new HyperdriveDaemon()
-    await daemon.start()
-    process.on('exit', () => daemon.stop())
-  } else {
-    isControllingDaemonProcess = true
-    logger.info('Starting daemon process, assuming process control')
-    await HyperdriveDaemonManager.start({
-      interpreter: app.getPath('exe'),
-      env: Object.assign({}, process.env, {ELECTRON_RUN_AS_NODE: 1, ELECTRON_NO_ASAR: 1}),
-      noPM2DaemonMode: true,
-      memoryOnly: false,
-      heapSize: 4096, // 4GB heap
-      storage: constants.root
+  isControllingDaemonProcess = true
+  logger.info('Starting daemon process, assuming process control')
+
+  // Check which storage directory to use.
+  // If .hyperspace/storage exists, use that. Otherwise use .hyperdrive/storage/cores
+  const storageDir = await getDaemonStorageDir()
+  var daemonProcessArgs = [HYPERSPACE_BIN_PATH, '-s', storageDir, '--no-migrate']
+  logger.info(`Daemon: spawn ${app.getPath('exe')} ${daemonProcessArgs.join(' ')}`)
+  daemonProcess = childProcess.spawn(app.getPath('exe'), daemonProcessArgs, {
+    // stdio: [process.stdin, process.stdout, process.stderr], // DEBUG
+    env: Object.assign({}, process.env, {
+      ELECTRON_RUN_AS_NODE: 1,
+      ELECTRON_NO_ASAR: 1
     })
-  }
+  })
+  daemonProcess.stdout.on('data', data => logger.info(`Daemon: ${data}`))
+  daemonProcess.stderr.on('data', data => logger.info(`Daemon (stderr): ${data}`))
+  daemonProcess.on('error', (err) => logger.error(`Hyperspace Daemon error: ${err.toString()}`))
+  daemonProcess.on('close', () => {
+    logger.info(`Daemon process has closed`)
+    isDaemonActive = false
+    daemonProcess = undefined
+    events.emit('daemon-stopped')
+  })
 
   await attemptConnect()
+  isDaemonActive = true
+  isFirstConnect = false
+  events.emit('daemon-restored')
   reconnectAllDriveSessions()
 }
 
@@ -186,9 +183,24 @@ export function requiresShutdown () {
 }
 
 export async function shutdown () {
-  if (isControllingDaemonProcess) {
+  if (isControllingDaemonProcess && isDaemonActive) {
+    let promise = new Promise((resolve) => {
+      daemonProcess.on('close', () => resolve())
+    })
     isShuttingDown = true
-    return HyperdriveDaemonManager.stop()
+    daemonProcess.kill()
+    
+    // HACK: the daemon has a bug that causes it to stay open sometimes, give it the double tap -prf
+    let i = setInterval(() => {
+      if (!isDaemonActive) {
+        clearInterval(i)
+      } else {
+        daemonProcess.kill()
+      }
+    }, 2e3)
+    i.unref()
+
+    await promise
   }
 }
 
@@ -274,29 +286,32 @@ export function closeHyperdriveSession (opts) {
   }
 }
 
-export async function getPeerCount (key) {
-  if (!client) return 0
-  var res = await client.drive.peerCounts([key])
-  return res[0]
-}
-
-export async function listPeerAddresses (discoveryKey) {
-  if (!client) return []
-  var peers = await client.peers.listPeers(discoveryKey)
-  return peers.map(p => p.address)
+export function listPeerAddresses (key) {
+  let peers = getHyperdriveSession({key})?.session?.drive?.metadata?.peers
+  if (peers) return peers.map(p => ({type: p.type, remoteAddress: p.remoteAddress}))
 }
 
 // internal methods
 // =
 
+async function getDaemonStorageDir () {
+  try {
+    await fs.access(HYPERDRIVE_STORAGE_DIR)
+    return HYPERDRIVE_STORAGE_DIR
+  } catch (err) {
+    return HYPERSPACE_STORAGE_DIR
+  }
+}
+
 async function onInvalidAuthToken () {
-  if (!isConnectionActive) return
-  isConnectionActive = false
-  logger.info('A daemon reset was detected. Refreshing all drive sessions.')
-  // daemon is online but our connection is outdated, reset the connection
-  await attemptConnect()
-  reconnectAllDriveSessions()
-  logger.info('Connection re-established.')
+  // TODO replaceme
+  // if (!isConnectionActive) return
+  // isConnectionActive = false
+  // logger.info('A daemon reset was detected. Refreshing all drive sessions.')
+  // // daemon is online but our connection is outdated, reset the connection
+  // await attemptConnect()
+  // reconnectAllDriveSessions()
+  // logger.info('Connection re-established.')
 }
 
 function createSessionKey (opts) {
@@ -319,13 +334,13 @@ async function attemptConnect () {
     try {
       client = new HyperdriveClient()
       await client.ready()
+      break
     } catch (e) {
       logger.info('Failed to connect to daemon, retrying')
       await new Promise(r => setTimeout(r, connectBackoff))
       connectBackoff += 100
     }
   }
-  isConnectionActive = true
 }
 
 async function reconnectAllDriveSessions () {

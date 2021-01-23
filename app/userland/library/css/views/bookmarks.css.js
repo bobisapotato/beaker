@@ -22,6 +22,11 @@ a {
   user-select: none;
 }
 
+:host(:not(.full-size)) .bookmarks {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
 .bookmarks .empty {
   font-size: 16px;
   letter-spacing: 0.7px;
@@ -40,8 +45,8 @@ a {
 .bookmark {
   display: flex;
   align-items: center;
-  padding: 12px 20px;
-  color: var(--text-color--lightish);
+  padding: 6px 14px;
+  color: var(--text-color--light);
   border-bottom: 1px solid var(--border-color--light);
 }
 
@@ -49,9 +54,19 @@ a {
   border-top: 1px solid var(--border-color--light);
 }
 
+.bookmark.private {
+  background: var(--bg-color--private-light);
+  color: var(--text-color--private-default);
+  border-color: var(--border-color--private-light);
+}
+
 .bookmark:hover {
   text-decoration: none;
   background: var(--bg-color--light);
+}
+
+.bookmark.private:hover {
+  background: var(--bg-color--private-semi-light);
 }
 
 .bookmark > * {
@@ -64,31 +79,49 @@ a {
   display: block;
   width: 16px;
   height: 16px;
-  margin-right: 20px;
+  margin-right: 12px;
 }
 
 .bookmark .title {
-  font-weight: 500;
+  font-weight: 400;
   margin-right: 20px;
-}
-
-:host(.full-size) .bookmark .title {
   flex: 1;
   font-size: 14px;
   margin-right: 0px;
+  color: var(--text-color--default);
+}
+
+.bookmark.private .title {
 }
 
 .bookmark .href {
   flex: 1;
-  color: #99a;
+  color: inherit;
 }
 
-:host(.full-size) .bookmark .href {
-  flex: 2;
+.bookmark .info {
+  flex: 0 0 100px;
+  color: inherit;
 }
 
 .bookmark .ctrls {
-  width: 75px;
+  width: 40px;
+}
+
+@media (max-width: 700px) {
+  .bookmark {
+    font-size: 12px;
+  }
+  .bookmark .favicon {
+    width: 12px;
+    height: 12px;
+  }
+  .bookmark .title {
+    font-size: 12px;
+  }
+  .bookmark .info {
+    flex: 0 0 50px;
+  }
 }
 
 `

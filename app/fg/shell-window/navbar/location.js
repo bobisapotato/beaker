@@ -2,13 +2,14 @@
 import { ipcRenderer } from 'electron'
 import { LitElement, html, css } from '../../vendor/lit-element/lit-element'
 import { classMap } from '../../vendor/lit-element/lit-html/directives/class-map'
+import { queryAutocomplete } from '../../lib/location'
 import prettyHash from 'pretty-hash'
 import * as bg from '../bg-process-rpc'
 import buttonResetCSS from './button-reset.css'
 import tooltipCSS from './tooltip.css'
 import './site-info'
 
-const isDatHashRegex = /^[a-z0-9]{64}/i
+const isHyperHashRegex = /^[a-z0-9]{64}/i
 const NETWORK_STATS_POLL_INTERVAL = 5000 // ms
 
 class NavbarLocation extends LitElement {
@@ -22,7 +23,7 @@ class NavbarLocation extends LitElement {
       siteIcon: {type: String},
       siteTrust: {type: String},
       driveDomain: {type: String},
-      isSystemDrive: {type: Boolean, attribute: 'is-system-drive'},
+      driveIdent: {type: String},
       writable: {type: Boolean},
       folderSyncPath: {type: String, attribute: 'folder-sync-path'},
       peers: {type: Number},
@@ -50,7 +51,7 @@ class NavbarLocation extends LitElement {
     this.siteIcon = ''
     this.siteTrust = ''
     this.driveDomain = ''
-    this.isSystemDrive = false
+    this.driveIdent = ''
     this.writable = false
     this.folderSyncPath = undefined
     this.peers = 0
@@ -65,16 +66,40 @@ class NavbarLocation extends LitElement {
     this.isLocationFocused = false
     this.hasExpanded = false
     this.shouldSelectAllOnFocus = false
+    this.autocompleteState = {
+      queryIdCounter: 0,
+      inputValue: '',
+      lastInputValue: '',
+      results: [],
+      urlGuess: undefined,
+      bookmarksFetch: bg.bookmarks.list().then(bs => bs.map(b => {b.isBookmark = true; b.url = b.href; return b})),
+      searchEnginesPromise: bg.beakerBrowser.getSetting('search_engines')
+    }
+    this._isAutocompleteOpen = false
+    this.dontShowAutocompleteOnNextFocus = false // helper to avoid showing autocomplete on new tab
 
     setInterval(async () => {
       if (!this.url.startsWith('hyper://')) return
       var state = await bg.views.getNetworkState('active')
-      this.peers = state ? state.peers : 0
+      this.peers = state?.peers?.length || 0
       this.requestUpdate()
     }, NETWORK_STATS_POLL_INTERVAL)
 
     // listen for commands from the main process
     ipcRenderer.on('command', this.onCommand.bind(this))
+  }
+
+  get isAutocompleteOpen () {
+    return this._isAutocompleteOpen || false
+  }
+
+  set isAutocompleteOpen (v) {
+    this._isAutocompleteOpen = v
+    if (v) {
+      this.setAttribute('autocomplete-open', 'autocomplete-open')
+    } else {
+      this.removeAttribute('autocomplete-open')
+    }
   }
 
   get isBeaker () {
@@ -125,10 +150,12 @@ class NavbarLocation extends LitElement {
         siteIcon=${this.siteIcon}
         siteTrust=${this.siteTrust}
         driveDomain=${this.driveDomain}
+        driveIdent=${this.driveIdent}
         ?writable=${this.writable}
         .loadError=${this.loadError}
         ?hide-origin=${this.hasExpanded}
-        ?rounded=${this.url.startsWith('beaker://desktop')}
+        ?rounded=${false/*this.url.startsWith('beaker://desktop')*/}
+        ?autocomplete-open=${this.isAutocompleteOpen}
       >
       </shell-window-navbar-site-info>
       ${this.renderLocation()}
@@ -137,10 +164,10 @@ class NavbarLocation extends LitElement {
       ${this.renderLiveReloadingBtn()}
       ${this.renderFolderSyncBtn()}
       ${this.renderPeers()}
-      ${this.renderSiteBtn()}
       ${this.renderDonateBtn()}
       ${''/* DISABLED this.renderShareBtn()*/}
       ${this.renderBookmarkBtn()}
+      ${this.renderSiteBtn()}
     `
   }
 
@@ -155,6 +182,7 @@ class NavbarLocation extends LitElement {
           @blur=${this.onBlurLocation}
           @input=${this.onInputLocation}
           @keydown=${this.onKeydownLocation}
+          @contextmenu=${this.onContextmenuLocation}
         >
         ${this.isLocationFocused ? '' : this.renderInputPretty()}
       </div>
@@ -185,7 +213,7 @@ class NavbarLocation extends LitElement {
             host = match[1]
             hostVersion = '+' + match[2]
           }
-          if (isDatHashRegex.test(host)) {
+          if (isHyperHashRegex.test(host)) {
             host = prettyHash(host)
           }
         }
@@ -298,12 +326,7 @@ class NavbarLocation extends LitElement {
 
   renderBookmarkBtn () {
     return html`
-      <button
-        class="bookmark tooltip-left"
-        @click=${this.onClickBookmark}
-        data-tooltip="Bookmark this page"
-        title="Bookmark this page"
-      >
+      <button class="bookmark" @click=${this.onClickBookmark} title="Bookmark this page">
         <span class="${this.isBookmarked ? 'fas' : 'far'} fa-star"></span>
       </button>
     `
@@ -330,15 +353,19 @@ class NavbarLocation extends LitElement {
   // events
   // =
 
-  onCommand (e, cmd) {
+  onCommand (e, cmd, ...args) {
     if (cmd === 'create-bookmark') {
       this.onClickBookmark()
     }
     if (cmd === 'focus-location') {
+      this.dontShowAutocompleteOnNextFocus = true
       this.focusLocation()
     }
     if (cmd === 'unfocus-location') {
       this.unfocusLocation()
+    }
+    if (cmd === 'set-search-engines') {
+      this.autocompleteState.searchEnginesPromise = JSON.parse(args[0])
     }
   }
 
@@ -360,12 +387,24 @@ class NavbarLocation extends LitElement {
     var input = e.currentTarget
     if (!this.url.startsWith('beaker://desktop')) {
       input.value = this.url
-      this.hasExpanded = true
     } else {
       input.value = ''
     }
+    this.hasExpanded = true
     this.isLocationFocused = true
+
+    if (!this.dontShowAutocompleteOnNextFocus) {
+      var rect = this.getClientRects()[0]
+      bg.views.runLocationBarCmd('show', {
+        bounds: {x: (rect.left|0), y: (rect.bottom|0), width: (rect.width|0)},
+        results: (await this.autocompleteState.bookmarksFetch).slice(0, 10)
+      })
+      this.isAutocompleteOpen = true
+    }
+    this.dontShowAutocompleteOnNextFocus = false
+
     await this.requestUpdate()
+
     if (this.shouldSelectAllOnFocus) {
       input.setSelectionRange(0, input.value.length)
       this.shouldSelectAllOnFocus = false
@@ -373,6 +412,9 @@ class NavbarLocation extends LitElement {
   }
 
   onBlurLocation (e) {
+    this.isAutocompleteOpen = false
+    bg.views.runLocationBarCmd('hide')
+
     // clear the selection range so that the next focusing doesnt carry it over
     window.getSelection().empty()
     this.shadowRoot.querySelector('.input-container input').value = this.url // reset value
@@ -390,25 +432,61 @@ class NavbarLocation extends LitElement {
   }
 
   onInputLocation (e) {
-    var rect = this.getClientRects()[0]
-    var value = e.currentTarget.value
-    var selectionStart = e.currentTarget.selectionStart
-    bg.views.runLocationBarCmd('set-value', {
-      bounds: {
-        x: rect.left|0,
-        y: (rect.top|0) - 2,
-        width: rect.width|0
-      },
-      value,
-      selectionStart
-    })
-    e.currentTarget.blur()
+    this.autocompleteState.inputValue = e.currentTarget.value.trim()
+    queryAutocomplete(bg, this.autocompleteState, this.onAutocompleteResults.bind(this))
   }
 
-  onKeydownLocation (e) {
+  async onKeydownLocation (e) {
     if (e.key === 'Enter') {
-      bg.views.reload('active')
+      e.preventDefault()
+      this.autocompleteState.queryIdCounter = -1 // cancel any active queries
+      bg.views.runLocationBarCmd('choose-selection')
       e.currentTarget.blur()
+      return
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.currentTarget.blur()
+      return
+    }
+
+    var up = ((e.key === 'Tab' && e.shiftKey) || e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p'))
+    var down = ((e.key === 'Tab' && !e.shiftKey) || e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n'))
+    if (up || down) {
+      e.preventDefault()
+      this.shadowRoot.querySelector('input').value = await bg.views.runLocationBarCmd('move-selection', {up, down})
+    }
+  }
+
+  onContextmenuLocation (e) {
+    e.preventDefault()
+    e.stopPropagation()
+    bg.views.showLocationBarContextMenu('active')
+  }
+
+  onAutocompleteResults (isPartialResults = false) {
+    if (!this.isAutocompleteOpen) {
+      let rect = this.getClientRects()[0]
+      bg.views.runLocationBarCmd('show', {
+        bounds: {x: (rect.left|0), y: (rect.bottom|0), width: (rect.width|0) + 1},
+        query: this.autocompleteState.inputValue,
+        results: this.autocompleteState.results
+      })
+      this.isAutocompleteOpen = true
+      this.requestUpdate() // to handle the isAutocompleteOpen change
+    } else {
+      bg.views.runLocationBarCmd('set-results', {
+        query: this.autocompleteState.inputValue,
+        results: this.autocompleteState.results
+      })
+    }
+    if (!isPartialResults && this.autocompleteState.urlGuess) {
+      // we have a "URL guess"
+      let rangeStart = this.autocompleteState.inputValue.length
+      let input = this.shadowRoot.querySelector('input')
+      input.value = this.autocompleteState.urlGuess.input
+      input.setSelectionRange(rangeStart, this.autocompleteState.urlGuess.input.length)
     }
   }
 
@@ -515,6 +593,15 @@ NavbarLocation.styles = [buttonResetCSS, tooltipCSS, css`
   border: 1px solid var(--border-color--location-input--untrusted);
 }
 
+:host([autocomplete-open]) {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border: 1px solid var(--border-color--input--focused);
+  border-bottom: 0;
+}
+
 button {
   width: 27px;
   border-radius: 0;
@@ -613,6 +700,15 @@ button.folder-sync .fa-sync {
   font-size: 8px;
   position: relative;
   top: -3px;
+}
+
+button.folder-sync .fa-folder-open {
+  transform: translateY(.5px);
+}
+
+button.site .fa-angle-down {
+  position: relative;
+  top: 1px;
 }
 
 .input-container {

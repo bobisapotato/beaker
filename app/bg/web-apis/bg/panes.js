@@ -1,4 +1,3 @@
-import { BrowserView } from 'electron'
 import emitStream from 'emit-stream'
 import * as tabManager from '../../ui/tabs/manager'
 import * as permissions from '../../ui/permissions'
@@ -56,7 +55,7 @@ export default {
 
     opts = opts && typeof opts === 'object' ? opts : {}
     var {tab, senderPane} = getPaneObjects(this.sender)
-    var newPane = tab.createPane({url, setActive: true})
+    var newPane = tab.createPane({url, setActive: true, splitDir: 'vert', after: tab.activePane})
     if (opts.attach) {
       if (!(await permissions.requestPermission('panesAttach', this.sender))) {
         throw new UserDeniedError()
@@ -104,10 +103,9 @@ export default {
 }
 
 function getPaneObjects (sender) {
-  var view = BrowserView.fromWebContents(sender)
-  var tab = tabManager.findContainingTab(view)
+  var tab = tabManager.findTab(sender)
   if (!tab) throw new Error('Requesting pane not active')
-  var senderPane = tab.findPane(view)
+  var senderPane = tab.findPane(sender)
   if (!senderPane) throw new Error('Requesting pane not active')
   return {tab, senderPane}
 }

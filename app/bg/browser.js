@@ -1,4 +1,4 @@
-import { app, dialog, BrowserWindow, BrowserView, webContents, ipcMain, shell, Menu, screen, session, nativeImage } from 'electron'
+import { app, dialog, BrowserWindow, webContents, ipcMain, shell, Menu, screen, session, nativeImage } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import os from 'os'
 import path from 'path'
@@ -11,6 +11,7 @@ import EventEmitter from 'events'
 import LRU from 'lru'
 const exec = require('util').promisify(require('child_process').exec)
 import * as logLib from './logger'
+import * as adblocker from './adblocker'
 const logger = logLib.child({category: 'browser'})
 import * as settingsDb from './dbs/settings'
 import { convertDatArchive } from './dat/index'
@@ -23,11 +24,11 @@ import { updateSetupState } from './ui/setup-flow'
 import * as modals from './ui/subwindows/modals'
 import * as siteInfo from './ui/subwindows/site-info'
 import { findWebContentsParentWindow } from './lib/electron'
-import { getEnvVar } from './lib/env'
 import * as hyperDaemon from './hyper/daemon'
 import * as bookmarks from './filesystem/bookmarks'
-import * as toolbar from './filesystem/toolbar'
-import { setupDefaultProfile, getProfile, getDriveIdent } from './filesystem/index'
+import { getDriveIdent } from './filesystem/index'
+import * as wcTrust from './wc-trust'
+import { spawnAndExecuteJs } from './lib/electron'
 
 // constants
 // =
@@ -78,6 +79,8 @@ process.on('uncaughtException', (err) => {
 // =
 
 export async function setup () {
+  wcTrust.setup()
+
   // setup auto-updater
   if (isBrowserUpdatesSupported) {
     try {
@@ -94,7 +97,6 @@ export async function setup () {
 
   // wire up events
   app.on('web-contents-created', onWebContentsCreated)
-  toolbar.on('changed', updateWindowToolbar)
 
   // window.prompt handling
   //  - we have use ipc directly instead of using rpc, because we need custom
@@ -114,7 +116,42 @@ export async function setup () {
   ipcMain.on('resize-hackfix', (e, message) => {
     var win = findWebContentsParentWindow(e.sender)
     if (win) {
-      win.webContents.executeJavaScript(`if (window.forceUpdateDragRegions) { window.forceUpdateDragRegions() }`)
+      win.webContents.executeJavaScript(`if (window.forceUpdateDragRegions) { window.forceUpdateDragRegions() }; undefined`)
+    }
+  })
+
+  // request blocking for security purposes
+  session.defaultSession.webRequest.onBeforeRequest((details, cb) => {
+    if (details.url.startsWith('asset:') || details.url.startsWith('beaker:')) {
+      if (details.resourceType === 'mainFrame') {
+        // allow toplevel navigation
+        return cb({cancel: false})
+      } else if (details.webContentsId && wcTrust.isWcTrusted(details.webContentsId)) {
+        // allow trusted WCs
+        return cb({cancel: false})
+      } else {
+        // disallow all other requesters
+        return cb({cancel: true})
+      }
+    } else if (details.url.startsWith('hyper://private')) {
+      if (!details.webContentsId) {
+        if (details.resourceType === 'mainFrame') {
+          // allow toplevel navigation
+          return cb({cancel: false})
+        } else {
+          // not enough info, cancel
+          return cb({cancel: true})
+        }
+      }
+      let wc = webContents.fromId(details.webContentsId)
+      if (/^(beaker:\/\/|hyper:\/\/private\/)/.test(wc.getURL())) {
+        // allow access from self and from beaker
+        cb({cancel: false})
+      } else {
+        cb({cancel: true})
+      }
+    } else {
+      adblocker.onBeforeRequest(details, cb)
     }
   })
 
@@ -139,15 +176,14 @@ export const WEBAPI = {
   getInfo,
   getDaemonStatus,
   getDaemonNetworkStatus,
-  getProfile,
   checkForUpdates,
   restartBrowser,
 
   getSetting,
   getSettings,
   setSetting,
+  updateAdblocker,
   updateSetupState,
-  setupDefaultProfile,
   migrate08to09,
   setStartPageBackgroundImage,
 
@@ -157,7 +193,6 @@ export const WEBAPI = {
 
   fetchBody,
   downloadURL,
-  readFile,
 
   convertDat,
 
@@ -174,7 +209,6 @@ export const WEBAPI = {
   },
 
   executeShellWindowCommand,
-  updateWindowToolbar,
   toggleSiteInfo,
   toggleLiveReloading,
   setWindowDimensions,
@@ -186,6 +220,8 @@ export const WEBAPI = {
   closeWindow,
   resizeSiteInfo,
   refreshTabState,
+
+  spawnAndExecuteJs,
 
   showOpenDialog,
   showContextMenu,
@@ -205,7 +241,7 @@ export const WEBAPI = {
   openFolder,
   doWebcontentsCmd,
   doTest,
-  closeModal: () => {} // DEPRECATED, probably safe to remove soon
+  closeModal: () => {}, // DEPRECATED, probably safe to remove soon
 }
 
 export function fetchBody (url) {
@@ -223,20 +259,6 @@ export function fetchBody (url) {
 
 export async function downloadURL (url) {
   this.sender.downloadURL(url)
-}
-
-function readFile (obj, opts) {
-  var pathname = undefined
-  if (obj === 'beaker://std-cmds/index.json') {
-    pathname = path.join(__dirname, 'userland', 'std-cmds', 'index.json')
-  }
-  if (!pathname) return
-  return new Promise((resolve, reject) => {
-    fs.readFile(pathname, opts, (err, res) => {
-      if (err) reject(err)
-      else resolve(res)
-    })
-  })
 }
 
 export async function convertDat (url) {
@@ -264,10 +286,7 @@ export async function getCertificate (url) {
     return {type: 'beaker'}
   } else if (url.startsWith('hyper://')) {
     let ident = await getDriveIdent(url, true)
-    return {
-      type: 'hyperdrive',
-      ident
-    }
+    return {type: 'hyperdrive', ident}
   }
 }
 
@@ -523,17 +542,15 @@ export async function getDaemonStatus () {
   return hyperDaemon.getDaemonStatus()
 }
 
-var crypto = require('hypercore-crypto')
 export async function getDaemonNetworkStatus () {
-  var allStats = await hyperDaemon.getClient().drive.allStats()
-  for (let stats of allStats) {
-    stats[0].peerAddresses = await hyperDaemon.listPeerAddresses(crypto.discoveryKey(stats[0].metadata.key))
-    for (let stat of stats) {
-      stat.metadata.key = stat.metadata.key.toString('hex')
-      stat.content.key = stat.content.key.toString('hex')
+  // bit of a hack, this
+  return Array.from(hyperDaemon.getClient().drive._drives, drive => {
+    var key = drive.drive.key.toString('hex')
+    return {
+      key,
+      peers: hyperDaemon.listPeerAddresses(key)
     }
-  }
-  return allStats
+  })
 }
 
 export function checkForUpdates (opts = {}) {
@@ -577,6 +594,10 @@ export function getSettings () {
 
 export function setSetting (key, value) {
   return settingsDb.set(key, value)
+}
+
+export function updateAdblocker () {
+  return adblocker.setup()
 }
 
 export async function migrate08to09 () {
@@ -623,11 +644,6 @@ export async function capturePage (url, opts = {}) {
   return image
 }
 
-export async function updateWindowToolbar () {
-  let current = await toolbar.getCurrent()
-  browserEvents.emit('toolbar-changed', {toolbar: current})
-}
-
 // rpc methods
 // =
 
@@ -650,7 +666,7 @@ async function showOpenDialog (opts = {}) {
 
 function showContextMenu (menuDefinition) {
   var webContents = this.sender
-  var tab = tabManager.findTab(BrowserView.fromWebContents(webContents))
+  var tab = tabManager.findTab(webContents)
   return new Promise(resolve => {
     var cursorPos = screen.getCursorScreenPoint()
 
@@ -694,10 +710,16 @@ async function newWindow (state = {}) {
 }
 
 async function newPane (url, opts = {}) {
-  var senderView = BrowserView.fromWebContents(this.sender)
-  var tab = tabManager.findContainingTab(senderView)
-  var pane = tab && tab.findPane(senderView)
+  var tab = tabManager.findTab(this.sender)
+  var pane = tab && tab.findPane(this.sender)
   if (tab && pane) {
+    if (opts.replaceSameOrigin) {
+      let existingPane = tab.findPaneByOrigin(url)
+      if (existingPane) {
+        existingPane.loadURL(url)
+        return
+      }
+    }
     tab.createPane({url, setActive: true, after: pane, splitDir: opts.splitDir || 'vert'})
   }
 }
@@ -753,11 +775,8 @@ async function doTest (test) {
 // =
 
 function getSenderTab (sender) {
-  var view = BrowserView.fromWebContents(sender)
-  if (view) {
-    let tab = tabManager.findTab(view)
-    if (tab) return tab
-  }
+  let tab = tabManager.findTab(sender)
+  if (tab) return tab
   var win = findWebContentsParentWindow(sender)
   return tabManager.getActive(win)
 }
@@ -847,6 +866,7 @@ function onWillPreventUnload (e) {
 }
 
 function onCompleted (details) {
+  wcTrust.onWebRequestCompleted(details)
   function set (v) {
     resourceContentTypes.set(details.url, Array.isArray(v) ? v[0] : v)
   }

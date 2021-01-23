@@ -8,7 +8,6 @@ class DriveView extends LitElement {
     :host {
       --sans-serif: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Ubuntu, Cantarell, "Oxygen Sans", "Helvetica Neue", sans-serif;
       --monospace: Consolas, 'Lucida Console', Monaco, monospace;
-
       display: block;
       max-width: 800px;
       margin: 0 auto;
@@ -16,41 +15,33 @@ class DriveView extends LitElement {
       min-height: calc(100vh - 20px);
       font-family: var(--sans-serif);
     }
-
     a {
       text-decoration: none;
       color: #2864dc;
     }
-
     a:hover {
       text-decoration: underline;
     }
-
     hr {
       border: 0;
       border-top: 1px solid #dde;
     }
-
     header {
       padding: 20px 0 20px;
     }
-
     header h1,
     header p {
       margin: 0 0 10px;
       line-height: 1;
     }
-
     header h1 {
       letter-spacing: 0.75px;
     }
-
     header p {
       font-size: 16px;
       letter-spacing: 0.25px;
       color: #556;
     }
-
     header img {
       object-fit: cover;
       border-radius: 4px;
@@ -59,7 +50,6 @@ class DriveView extends LitElement {
       position: relative;
       top: 1px;
     }
-
     main h4 {
       font-family: var(--monospace);
       margin: 0;
@@ -69,13 +59,11 @@ class DriveView extends LitElement {
       border-radius: 4px;
       padding: 4px 8px;
     }
-
     .entries {
       margin: 20px 0;
       font-size: 14px;
       letter-spacing: 0.75px;
     }
-
     .entries > div {
       display: flex;
       justify-content: space-between;
@@ -84,19 +72,15 @@ class DriveView extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-
     .entries > div:hover {
       background: #fafafd;
     }
-
     .entries .size {
       color: #556;
     }
-
     .entries .fa-fw {
       color: #556;
     }
-
     .prompt {
       margin: 30px 0;
       font-size: 14px;
@@ -212,7 +196,7 @@ class DriveView extends LitElement {
   </body>
 </html>`)
     }
-    window.location = `beaker://editor/?url=${location.origin}${location.pathname}index.${ext}`
+    window.location = `${location.origin}${location.pathname}index.${ext}`
   }
 }
 

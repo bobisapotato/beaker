@@ -29,10 +29,15 @@ export function identify (name, chunk) {
   // try to identify the type by the chunk contents
   var mimeType
   var identifiedExt = (chunk) ? identifyFiletype(chunk) : false
+  if (identifiedExt === 'html') identifiedExt = false // HACK- never let HTML be determined by file content -prf
   if (identifiedExt) { mimeType = mime.lookup(identifiedExt, 'text/plain') }
   if (!mimeType) {
     // fallback to using the entry name
-    mimeType = mime.lookup(name, 'text/plain')
+    if (name.endsWith('.goto')) {
+      mimeType = 'application/goto' // this one's a little new
+    } else {
+      mimeType = mime.lookup(name, 'text/plain')
+    }
   }
   mimeType = correctSomeMimeTypes(mimeType, name)
 

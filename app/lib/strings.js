@@ -32,7 +32,7 @@ export function shortenHash (str, n = 6) {
 }
 
 export function makeSafe (str = '') {
-  return str.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;').replace(/"/g, '')
+  return str.replace(/&/g, '&amp;').replace(/"/g, '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 export function highlight (str = '', nonce = 0) {
@@ -112,4 +112,19 @@ export function globToRegex (str = '') {
     return '[^/]*'
   })
   return new RegExp(`^${str}(/.*)?$`)
+}
+
+const pathSpecRe = /^(.*)\/\*(\.[^\/]+)?$/i
+export function parseSimplePathSpec (str) {
+  if (typeof str !== 'string') {
+    throw new Error('Invalid path-spec. Must be a string.')
+  }
+  if (!pathSpecRe.test(str)) {
+    throw new Error('Invalid path-spec. Must be a simple path glob such as "/comments/*" or "/comments/*.md", not "/comments" or "/comments/foo*.md"')
+  }
+  var parts = str.split('*')
+  return {
+    prefix: parts[0].slice(0, -1), // slice to drop the trailing slash
+    extension: parts[1].length > 0 ? parts[1] : undefined
+  }
 }
